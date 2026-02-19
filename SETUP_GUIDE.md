@@ -196,6 +196,45 @@ az monitor app-insights query \
   --offset 2h
 ```
 
+Latest-run query (pulls the newest `invoke_agent` trace automatically):
+
+```bash
+az monitor app-insights query \
+  --ids "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/microsoft.insights/components/<app-insights-name>" \
+  --analytics-query "let latestTraceId = toscalar(requests | where operation_Name == 'invoke_agent' | top 1 by timestamp desc | project operation_Id); search * | where operation_Id == latestTraceId | project timestamp, itemType, operation_Name, operation_ParentId, message, customDimensions | order by timestamp asc | take 50" \
+  --offset 2h
+```
+
+### Trace Shape (Observed from Current Query, Redacted)
+
+The current live query shows this hierarchy pattern:
+
+1. `request` → `invoke_agent` (root span)
+2. `dependency` → `gen_ai.retriever` with:
+   - `retriever.query`
+   - `retriever.top_k`
+   - `retriever.result_count`
+3. `trace` event → `retriever_results`
+4. `dependency` → `gen_ai.chat` (`app.node_name=draft_plan`)
+5. `dependency` → `tool.get_weather` (`gen_ai.operation.name=execute_tool`)
+6. `dependency` → `tool.estimate_cost` (`gen_ai.operation.name=execute_tool`)
+7. `trace` event → `goto_triggered` (`from=evaluate_constraints`, `to=replan`)
+8. `dependency` → `gen_ai.chat` (`app.node_name=replan`)
+9. `dependency` → `gen_ai.chat` (`app.node_name=finalize`)
+
+Representative redacted row snippets:
+
+```text
+request    invoke_agent      parent=<incoming-parent-span-id>
+dependency gen_ai.retriever  parent=<workflow-span-id>
+trace      retriever_results parent=<retriever-span-id>
+dependency gen_ai.chat       customDimensions.app.node_name=draft_plan
+dependency tool.get_weather  customDimensions.gen_ai.operation.name=execute_tool
+trace      goto_triggered    customDimensions.reason=force_goto
+dependency gen_ai.chat       customDimensions.app.node_name=replan
+dependency gen_ai.chat       customDimensions.app.node_name=finalize
+```
+
 Expected records:
 - `request` with `operation_Name=invoke_agent`
 - `dependency` for `gen_ai.chat`, `tool.get_weather`, `tool.estimate_cost`, `gen_ai.retriever`

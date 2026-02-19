@@ -108,3 +108,29 @@ One `/invoke` should show:
 - `OTEL_RECORD_CONTENT=false` is the default.
 - Sampler setting uses `parentbased_trace_id_ratio`.
 - See **[SETUP_GUIDE.md](./SETUP_GUIDE.md)** for complete reproducible commands and verification queries.
+
+## FAQ (for users and AI agents)
+
+### 1) How do I confirm the service is actually using GPT-4.1?
+Check App Insights dependency spans for `gen_ai.response.model` and your configured deployment in `AZURE_OPENAI_CHAT_DEPLOYMENT`.
+
+### 2) Why do I see both `gen_ai.chat` and `chat gpt-4.1-*` spans?
+`gen_ai.chat` is the app-level semantic span; `chat gpt-4.1-*` is provider/client-level detail span from the SDK callbacks.
+
+### 3) How do I force the `goto` path for demos?
+Set `options.force_goto_path=true` in `/invoke` or set `DEMO_FORCE_GOTO=true` for environment-level forcing.
+
+### 4) Why do traces look flat sometimes?
+This usually happens when work is executed outside the graph run context. Keep nested LLM/tool/retriever calls inside graph nodes.
+
+### 5) Why are traces missing entirely?
+Common causes: missing `APPLICATION_INSIGHTS_CONNECTION_STRING`, blocked egress, or misconfigured sampler.
+
+### 6) How do I keep telemetry safe?
+Keep `OTEL_RECORD_CONTENT=false` in shared/prod environments; only enable content capture for controlled debugging.
+
+### 7) What should I preserve if another AI updates this repo?
+Do not remove node-level span attributes/events (`app.node_name`, `app.route_decision`, `biz.request_id`, `goto_triggered`) or deterministic tool/retriever behavior.
+
+### 8) How do I rotate config without rebuilding image?
+Update ConfigMap/Secret values and redeploy/restart pods; image rebuild is not required for env-only changes.
