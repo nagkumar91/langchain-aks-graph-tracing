@@ -32,8 +32,11 @@ python3 -m pip install -e .[dev]
 ```bash
 source .venv/bin/activate
 python3 -m pip install --force-reinstall --no-deps \
-  "langchain-azure-ai[opentelemetry] @ git+<your-langchain-azure-fork-url>@<branch>#subdirectory=libs/azure-ai"
+  "langchain-azure-ai[opentelemetry] @ git+https://github.com/nagkumar91/langchain-azure.git@copilot/implement-compatibility-improvements#subdirectory=libs/azure-ai"
 ```
+
+> Note: this is a temporary branch install for compatibility work; once that PR is merged/released, switch back to:
+> `python3 -m pip install -U "langchain-azure-ai[opentelemetry]"`
 
 Verification command:
 
@@ -47,9 +50,9 @@ PY
 ```
 
 Expected:
-- URL points to your fork
-- Requested revision matches your feature branch
-- Commit SHA matches your expected branch head
+- URL points to `nagkumar91/langchain-azure.git`
+- Requested revision is `copilot/implement-compatibility-improvements`
+- Commit SHA matches the expected branch head
 
 ## 4) Local Validation
 
