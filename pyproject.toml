@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langgraph-workflow-agent"
+version = "0.1.0"
+description = "Custom LangGraph workflow agent with AKS deployment and OTel tracing."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn>=0.30.0",
+  "langgraph>=0.2.60",
+  "langchain-core>=0.3.0",
+  "langchain-openai>=0.2.0",
+  "langchain-azure-ai[opentelemetry]>=0.1.0",
+  "opentelemetry-api>=1.27.0",
+  "opentelemetry-sdk>=1.27.0",
+  "azure-monitor-opentelemetry-exporter>=1.0.0b30",
+  "azure-identity>=1.17.1",
+  "pydantic>=2.8.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+  "httpx>=0.27.0",
+  "azure-monitor-query>=1.4.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
