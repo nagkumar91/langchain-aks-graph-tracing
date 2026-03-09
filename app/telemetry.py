@@ -98,7 +98,13 @@ def initialize_tracing() -> TelemetryConfig:
         )
     trace.set_tracer_provider(provider)
 
-    callback_enabled = _load_tracer_class() is not None
+    try:
+        from langchain_azure_ai.callbacks.tracers.inference_tracing import (  # noqa: F401
+            AzureAIOpenTelemetryTracer,
+        )
+        callback_enabled = True
+    except ImportError:
+        callback_enabled = False
     _CONFIG = TelemetryConfig(
         service_name=service_name,
         resource_attributes=attrs,
@@ -112,37 +118,28 @@ def initialize_tracing() -> TelemetryConfig:
     return _CONFIG
 
 
-def _load_tracer_class() -> type | None:
+def create_langchain_callbacks(record_content: bool) -> list[Any]:
     try:
         from langchain_azure_ai.callbacks.tracers.inference_tracing import (
             AzureAIOpenTelemetryTracer,
         )
-
-        return AzureAIOpenTelemetryTracer
-    except Exception:
-        return None
-
-
-def create_langchain_callbacks(record_content: bool) -> list[Any]:
-    tracer_cls = _load_tracer_class()
-    if tracer_cls is None:
+    except ImportError:
+        LOGGER.warning("langchain_azure_ai not installed; tracing callbacks disabled.")
         return []
 
-    for kwargs in (
-        {
-            "enable_content_recording": record_content,
-            "name": os.getenv("OTEL_SERVICE_NAME", "langgraph-workflow-agent"),
-        },
-        {"record_content": record_content, "name": os.getenv("OTEL_SERVICE_NAME", "agent")},
-        {"enable_content_recording": record_content},
-        {"record_content": record_content},
-        {},
-    ):
-        try:
-            return [tracer_cls(**kwargs)]
-        except TypeError:
-            continue
-    return []
+    connection_string = os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
+    if not connection_string:
+        LOGGER.warning("APPLICATION_INSIGHTS_CONNECTION_STRING not set; tracing callbacks disabled.")
+        return []
+
+    tracer = AzureAIOpenTelemetryTracer(
+        connection_string=connection_string,
+        enable_content_recording=record_content,
+        provider_name="azure_openai",
+        name=os.getenv("OTEL_SERVICE_NAME", "langgraph-workflow-agent"),
+        trace_all_langgraph_nodes=True,
+    )
+    return [tracer]
 
 
 def effective_telemetry_config() -> dict[str, Any]:

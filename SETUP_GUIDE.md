@@ -27,16 +27,12 @@ python3 -m pip install -e .[dev]
 - AKS runtime secrets: `k8s/secret.yaml` or `kubectl create secret ...`
 - CI/CD secrets: GitHub repository secrets
 
-## 3) Install `langchain-azure-ai[opentelemetry]` from Branch
+## 3) Install `langchain-azure-ai[opentelemetry]`
 
 ```bash
 source .venv/bin/activate
-python3 -m pip install --force-reinstall --no-deps \
-  "langchain-azure-ai[opentelemetry] @ git+https://github.com/nagkumar91/langchain-azure.git@copilot/implement-compatibility-improvements#subdirectory=libs/azure-ai"
+python3 -m pip install -U "langchain-azure-ai[opentelemetry]"
 ```
-
-> Note: this is a temporary branch install for compatibility work; once that PR is merged/released, switch back to:
-> `python3 -m pip install -U "langchain-azure-ai[opentelemetry]"`
 
 Verification command:
 
