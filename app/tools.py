@@ -40,6 +40,36 @@ WEATHER_TABLE: dict[str, dict[str, dict[str, Any]]] = {
         "2026-09-11": {"condition": "sunny", "high_f": 80, "low_f": 67},
         "2026-09-12": {"condition": "partly_cloudy", "high_f": 77, "low_f": 64},
     },
+    "london": {
+        "2026-06-15": {"condition": "cloudy", "high_f": 66, "low_f": 54},
+        "2026-06-16": {"condition": "rain", "high_f": 62, "low_f": 52},
+        "2026-06-17": {"condition": "partly_cloudy", "high_f": 68, "low_f": 55},
+    },
+    "seattle": {
+        "2026-07-10": {"condition": "sunny", "high_f": 76, "low_f": 58},
+        "2026-07-11": {"condition": "partly_cloudy", "high_f": 73, "low_f": 57},
+        "2026-07-12": {"condition": "sunny", "high_f": 78, "low_f": 59},
+    },
+    "rome": {
+        "2026-05-01": {"condition": "sunny", "high_f": 74, "low_f": 55},
+        "2026-05-02": {"condition": "sunny", "high_f": 76, "low_f": 57},
+        "2026-05-03": {"condition": "partly_cloudy", "high_f": 72, "low_f": 54},
+    },
+    "dubai": {
+        "2026-11-10": {"condition": "sunny", "high_f": 86, "low_f": 72},
+        "2026-11-11": {"condition": "sunny", "high_f": 88, "low_f": 73},
+        "2026-11-12": {"condition": "sunny", "high_f": 85, "low_f": 71},
+    },
+    "sydney": {
+        "2026-12-01": {"condition": "sunny", "high_f": 79, "low_f": 65},
+        "2026-12-02": {"condition": "partly_cloudy", "high_f": 77, "low_f": 64},
+        "2026-12-03": {"condition": "sunny", "high_f": 81, "low_f": 66},
+    },
+    "bangkok": {
+        "2026-01-15": {"condition": "sunny", "high_f": 91, "low_f": 75},
+        "2026-01-16": {"condition": "sunny", "high_f": 93, "low_f": 76},
+        "2026-01-17": {"condition": "partly_cloudy", "high_f": 90, "low_f": 74},
+    },
 }
 
 # --- Deterministic flight pricing ---
@@ -74,6 +104,36 @@ FLIGHT_TABLE: dict[str, dict[str, dict[str, Any]]] = {
         "business": {"price_usd": 2400, "airline": "Iberia", "duration_hr": 9.0},
         "budget": {"price_usd": 390, "airline": "LEVEL", "duration_hr": 10.0},
     },
+    "london": {
+        "economy": {"price_usd": 550, "airline": "British Airways", "duration_hr": 7.5},
+        "business": {"price_usd": 2600, "airline": "British Airways", "duration_hr": 7.5},
+        "budget": {"price_usd": 380, "airline": "Norse Atlantic", "duration_hr": 8.5},
+    },
+    "seattle": {
+        "economy": {"price_usd": 250, "airline": "Alaska Airlines", "duration_hr": 5.5},
+        "business": {"price_usd": 850, "airline": "Delta", "duration_hr": 5.5},
+        "budget": {"price_usd": 130, "airline": "Frontier", "duration_hr": 6.0},
+    },
+    "rome": {
+        "economy": {"price_usd": 620, "airline": "ITA Airways", "duration_hr": 9.5},
+        "business": {"price_usd": 2700, "airline": "ITA Airways", "duration_hr": 9.5},
+        "budget": {"price_usd": 410, "airline": "Norse Atlantic", "duration_hr": 10.5},
+    },
+    "dubai": {
+        "economy": {"price_usd": 750, "airline": "Emirates", "duration_hr": 14.0},
+        "business": {"price_usd": 4800, "airline": "Emirates", "duration_hr": 14.0},
+        "budget": {"price_usd": 520, "airline": "flydubai", "duration_hr": 15.5},
+    },
+    "sydney": {
+        "economy": {"price_usd": 1200, "airline": "Qantas", "duration_hr": 21.0},
+        "business": {"price_usd": 5800, "airline": "Qantas", "duration_hr": 21.0},
+        "budget": {"price_usd": 850, "airline": "Jetstar", "duration_hr": 23.0},
+    },
+    "bangkok": {
+        "economy": {"price_usd": 800, "airline": "Thai Airways", "duration_hr": 17.0},
+        "business": {"price_usd": 3600, "airline": "Thai Airways", "duration_hr": 17.0},
+        "budget": {"price_usd": 550, "airline": "AirAsia X", "duration_hr": 19.0},
+    },
 }
 
 # --- Deterministic hotel pricing ---
@@ -107,6 +167,36 @@ HOTEL_TABLE: dict[str, dict[str, dict[str, Any]]] = {
         "budget": {"name": "Generator Barcelona", "price_per_night": 55, "rating": 3.5},
         "mid": {"name": "Hotel 1898 La Rambla", "price_per_night": 180, "rating": 4.2},
         "luxury": {"name": "Hotel Arts Barcelona", "price_per_night": 420, "rating": 4.7},
+    },
+    "london": {
+        "budget": {"name": "YHA London St Pancras", "price_per_night": 75, "rating": 3.4},
+        "mid": {"name": "The Resident Covent Garden", "price_per_night": 220, "rating": 4.1},
+        "luxury": {"name": "The Savoy", "price_per_night": 680, "rating": 4.9},
+    },
+    "seattle": {
+        "budget": {"name": "Green Tortoise Hostel", "price_per_night": 55, "rating": 3.6},
+        "mid": {"name": "Hyatt Regency Seattle", "price_per_night": 180, "rating": 4.0},
+        "luxury": {"name": "Four Seasons Hotel Seattle", "price_per_night": 520, "rating": 4.8},
+    },
+    "rome": {
+        "budget": {"name": "The Yellow Hostel", "price_per_night": 50, "rating": 3.5},
+        "mid": {"name": "Hotel Raphael", "price_per_night": 200, "rating": 4.2},
+        "luxury": {"name": "Hotel de Russie", "price_per_night": 580, "rating": 4.8},
+    },
+    "dubai": {
+        "budget": {"name": "Rove Downtown", "price_per_night": 80, "rating": 3.8},
+        "mid": {"name": "JW Marriott Marquis", "price_per_night": 220, "rating": 4.3},
+        "luxury": {"name": "Burj Al Arab", "price_per_night": 1500, "rating": 4.9},
+    },
+    "sydney": {
+        "budget": {"name": "Sydney Harbour YHA", "price_per_night": 65, "rating": 3.7},
+        "mid": {"name": "Ovolo Woolloomooloo", "price_per_night": 210, "rating": 4.2},
+        "luxury": {"name": "Park Hyatt Sydney", "price_per_night": 620, "rating": 4.9},
+    },
+    "bangkok": {
+        "budget": {"name": "NapPark Hostel", "price_per_night": 25, "rating": 3.8},
+        "mid": {"name": "Hotel Muse Bangkok", "price_per_night": 110, "rating": 4.3},
+        "luxury": {"name": "Mandarin Oriental Bangkok", "price_per_night": 400, "rating": 4.9},
     },
 }
 

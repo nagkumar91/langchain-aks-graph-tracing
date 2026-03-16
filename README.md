@@ -20,13 +20,13 @@ Zava plans complete trips for travelers by:
 - `user_proxy` → `orchestrator` → `retrieve_context` → `draft_plan` → `run_tools` → `evaluate_constraints` → `replan` (optional) → `finalize`
 
 ### Tools
-- **search_flights** - Deterministic flight search across 6 destinations with economy/business/budget classes
+- **search_flights** - Deterministic flight search across 12 destinations with economy/business/budget classes
 - **search_hotels** - Deterministic hotel search with budget/mid/luxury tiers
 - **get_destination_weather** - Weather forecasts for travel destinations
 - **estimate_trip_cost** - Full trip cost estimation (flights + hotels + activities)
 
 ### Destinations Supported
-Paris, Tokyo, Cancun, Bali, New York, Barcelona
+Paris, Tokyo, Cancun, Bali, New York, Barcelona, London, Seattle, Rome, Dubai, Sydney, Bangkok
 
 ## Repo Layout
 
