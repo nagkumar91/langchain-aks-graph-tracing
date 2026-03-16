@@ -106,7 +106,7 @@ def initialize_tracing() -> TelemetryConfig:
         sampler_arg=sampler_arg,
         exporter_enabled=exporter_enabled,
         callback_enabled=callback_enabled,
-        default_record_content=_parse_bool(os.getenv("OTEL_RECORD_CONTENT"), default=False),
+        default_record_content=_parse_bool(os.getenv("OTEL_RECORD_CONTENT"), default=True),
     )
     _INITIALIZED = True
     return _CONFIG

@@ -5,14 +5,14 @@ metadata:
   namespace: agent-tracing-demo
 data:
   OTEL_SERVICE_NAME: "zava-travel-agent"
-  OTEL_RECORD_CONTENT: "false"
+  OTEL_RECORD_CONTENT: "true"
   OTEL_TRACES_SAMPLER: "parentbased_trace_id_ratio"
   OTEL_TRACES_SAMPLER_ARG: "0.1"
   OTEL_RESOURCE_ATTRIBUTES: "deployment.environment=dev"
   AZURE_OPENAI_API_VERSION: "2025-01-01-preview"
   AZURE_OPENAI_ENDPOINT: "https://<your-azure-openai-resource>.cognitiveservices.azure.com"
   AZURE_OPENAI_CHAT_DEPLOYMENT: "gpt-4.1"
-  DEMO_FORCE_GOTO: "false"
+  DEMO_FORCE_GOTO: "true"
   DEMO_TOOL_FAILURE_RATE: "0.0"
   DEMO_RETRIEVER_TOPK: "3"
   BUILD_SHA: "dev"
