@@ -79,7 +79,7 @@ def initialize_tracing() -> TelemetryConfig:
     if normalized_sampler:
         os.environ["OTEL_TRACES_SAMPLER"] = normalized_sampler
 
-    service_name = os.getenv("OTEL_SERVICE_NAME", "langgraph-workflow-agent")
+    service_name = os.getenv("OTEL_SERVICE_NAME", "zava-travel-agent")
     attrs = _resource_attributes()
     attrs["service.name"] = service_name
     sampler, sampler_name, sampler_arg = _sampler_from_env()
@@ -131,9 +131,9 @@ def create_langchain_callbacks(record_content: bool) -> list[Any]:
     for kwargs in (
         {
             "enable_content_recording": record_content,
-            "name": os.getenv("OTEL_SERVICE_NAME", "langgraph-workflow-agent"),
+            "name": os.getenv("OTEL_SERVICE_NAME", "zava-travel-agent"),
         },
-        {"record_content": record_content, "name": os.getenv("OTEL_SERVICE_NAME", "agent")},
+        {"record_content": record_content, "name": os.getenv("OTEL_SERVICE_NAME", "zava")},
         {"enable_content_recording": record_content},
         {"record_content": record_content},
         {},

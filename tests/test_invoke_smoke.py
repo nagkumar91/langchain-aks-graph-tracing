@@ -13,21 +13,28 @@ class StubLLM:
             return AIMessage(
                 content=json.dumps(
                     {
+                        "destination": "Paris",
                         "itinerary": [
                             {
                                 "day": 1,
-                                "activity": "Waterfront Walk",
-                                "type": "outdoor",
+                                "activity": "Eiffel Tower & Seine Cruise",
+                                "type": "sightseeing",
                                 "budget_friendly": False,
                             },
                             {
                                 "day": 2,
-                                "activity": "Museum Day",
-                                "type": "indoor",
+                                "activity": "Louvre Museum & Montmartre",
+                                "type": "cultural",
+                                "budget_friendly": False,
+                            },
+                            {
+                                "day": 3,
+                                "activity": "Versailles Day Trip",
+                                "type": "sightseeing",
                                 "budget_friendly": False,
                             },
                         ],
-                        "summary": "Initial draft plan",
+                        "summary": "A 3-day Parisian adventure by Zava",
                     }
                 )
             )
@@ -35,39 +42,48 @@ class StubLLM:
             return AIMessage(
                 content=json.dumps(
                     {
+                        "destination": "Paris",
                         "itinerary": [
                             {
                                 "day": 1,
-                                "activity": "Discovery Park",
+                                "activity": "Free Walking Tour & Picnic",
                                 "type": "budget",
                                 "budget_friendly": True,
                             },
                             {
                                 "day": 2,
-                                "activity": "Food Hall + Museum Pass",
+                                "activity": "Musée d'Orsay Free Day & Parks",
+                                "type": "budget",
+                                "budget_friendly": True,
+                            },
+                            {
+                                "day": 3,
+                                "activity": "Marché aux Puces & Street Food",
                                 "type": "budget",
                                 "budget_friendly": True,
                             },
                         ],
-                        "summary": "Budget-friendly replan",
+                        "summary": "Budget-friendly Paris replan by Zava",
                     }
                 )
             )
-        return AIMessage(content="Here is your finalized itinerary and rationale.")
+        return AIMessage(content="Here is your Zava travel plan for Paris! Bon voyage!")
 
 
 def _payload(force_goto: bool = False) -> dict:
     return {
         "input": {
             "messages": [
-                {"role": "user", "content": "Plan a 2-day Seattle itinerary with rain backup."}
+                {"role": "user", "content": "Plan a 3-day trip to Paris for 2 travelers."}
             ]
         },
         "constraints": {
-            "budget_usd": 120.0,
-            "days": 2,
-            "location": "Seattle",
-            "dates": ["2026-05-20", "2026-05-21"],
+            "budget_usd": 800.0,
+            "days": 3,
+            "destination": "Paris",
+            "travelers": 2,
+            "travel_style": "mid",
+            "dates": ["2026-06-10", "2026-06-11", "2026-06-12"],
         },
         "options": {"record_content": False, "force_goto_path": force_goto},
     }
@@ -95,3 +111,14 @@ def test_invoke_honors_traceparent() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["telemetry"]["trace_id"] == incoming_trace_id
+
+
+def test_invoke_returns_flight_and_hotel_debug() -> None:
+    client = TestClient(create_app(llm=StubLLM()))
+    response = client.post("/invoke", json=_payload(force_goto=False))
+    assert response.status_code == 200
+    body = response.json()
+    debug = body["output"]["debug"]
+    assert "Air France" in debug["flight_summary"]
+    assert "Hotel Le Marais" in debug["hotel_summary"]
+    assert debug["cost_estimate_usd"] > 0

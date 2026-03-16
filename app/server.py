@@ -58,7 +58,7 @@ def _record_content(runtime: AgentRuntime, requested: bool | None) -> bool:
 
 def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None) -> FastAPI:
     runtime = AgentRuntime(llm=llm, retriever=retriever)
-    app = FastAPI(title="LangGraph Workflow Agent", version="0.1.0")
+    app = FastAPI(title="Zava Travel Agent", version="0.1.0")
     app.state.runtime = runtime
     tracer = trace.get_tracer(__name__)
 
@@ -120,7 +120,7 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
         ) as span:
             span.set_attribute("gen_ai.operation.name", "invoke_agent")
             span.set_attribute("gen_ai.provider.name", "azure_openai")
-            span.set_attribute("app.agent.name", "langgraph-workflow-agent")
+            span.set_attribute("app.agent.name", "zava-travel-agent")
             span.set_attribute("biz.request_id", request_id)
             if payload.user_id:
                 span.set_attribute("app.user_id", payload.user_id)
@@ -135,14 +135,21 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
                     detail=f"Workflow invocation failed: {exc}",
                 ) from exc
 
+            tool_outputs = result.get("tool_outputs", {})
             weather_summary = (
-                result.get("tool_outputs", {})
-                .get("weather", {})
-                .get("summary", "No weather summary available.")
+                tool_outputs.get("weather", {}).get("summary", "No weather data available.")
             )
-            cost_estimate = (
-                result.get("tool_outputs", {}).get("cost", {}).get("estimate_usd", 0.0)
-            )
+            cost_estimate = tool_outputs.get("cost", {}).get("estimate_usd", 0.0)
+            flights = tool_outputs.get("flights", {})
+            hotels = tool_outputs.get("hotels", {})
+            flight_summary = (
+                f"{flights.get('airline', 'N/A')} {flights.get('travel_class', '')} "
+                f"${flights.get('total_price_usd', 0)} for {flights.get('travelers', 0)} travelers"
+            ) if flights else "No flight data available."
+            hotel_summary = (
+                f"{hotels.get('hotel_name', 'N/A')} ({hotels.get('tier', '')}) "
+                f"${hotels.get('total_price_usd', 0)} for {hotels.get('nights', 0)} nights"
+            ) if hotels else "No hotel data available."
             final_message = result.get("final_answer", "No response generated.")
             trace_ctx = span.get_span_context()
             return InvokeResponse(
@@ -155,6 +162,8 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
                         route_taken=str(result.get("route", "normal")),
                         cost_estimate_usd=float(cost_estimate),
                         weather_summary=str(weather_summary),
+                        flight_summary=flight_summary,
+                        hotel_summary=hotel_summary,
                     ),
                 ),
                 telemetry=TelemetryPayload(

@@ -1,72 +1,78 @@
-# Custom LangGraph Workflow Agent (AKS + GPT-4.1 + GenAI Tracing)
+# Zava Travel Agent (LangGraph + AKS + GPT-4.1 + GenAI Tracing)
 
-This repo hosts a containerized FastAPI service with a custom LangGraph workflow (`goto` replan path), deterministic tools/retriever, GPT-4.1 Azure OpenAI calls, and OpenTelemetry GenAI tracing to Application Insights.
+**Zava** is an AI-powered travel agent built as a containerized FastAPI service. It uses a custom LangGraph workflow with `goto` replan path, deterministic travel tools (flight search, hotel search, weather, trip cost estimation), an offline travel knowledge retriever, GPT-4.1 Azure OpenAI calls, and OpenTelemetry GenAI tracing to Application Insights.
 
 For full step-by-step commands, use **[SETUP_GUIDE.md](./SETUP_GUIDE.md)**.
 
-## What Was Completed
+## What Zava Does
 
-### Application
-- Implemented explicit LangGraph nodes and edges: `user_proxy`, `orchestrator`, `retrieve_context`, `draft_plan`, `run_tools`, `evaluate_constraints`, `replan`, `finalize`.
-- Implemented `Command(goto="replan", update=...)` branch logic with `goto_triggered` telemetry event.
-- Added deterministic offline tools (`get_weather`, `estimate_cost`) and offline retriever corpus.
-- Added `/invoke`, `/healthz`, `/readyz`, `/version`, `/debug/telemetry`.
-- Added trace context extraction (`traceparent`/`tracestate`) and parent-child correlation.
+Zava plans complete trips for travelers by:
+1. Understanding travel constraints (budget, destination, dates, travelers, travel style)
+2. Retrieving relevant destination knowledge from its corpus
+3. Drafting an initial travel plan with flights, hotels, and daily activities
+4. Running tools to get weather forecasts, flight pricing, hotel availability, and cost estimates
+5. Evaluating budget constraints and replanning if needed (using LangGraph `goto`)
+6. Producing a final, friendly travel plan summary
 
-### Dependency and Local Validation
-- Local environment runs with `python3` + virtualenv.
-- Installed `langchain-azure-ai[opentelemetry]` from branch:
-  - repo: `<your-langchain-azure-fork-url>`
-  - ref: `<your-feature-branch>`
-  - commit: `<commit-sha>`
-- Local validation passed:
-  - `python3 -m compileall app`
-  - `python3 -m pytest` (`5 passed`, `1 skipped`)
-  - local `/invoke` smoke with traceparent correlation
+## Architecture
 
-### Azure and AKS Provisioning
-- Resource group used: `<resource-group-name>`
-- App Insights resource:
-  - `/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/microsoft.insights/components/<app-insights-name>`
-- Created:
-  - AKS: `<aks-name>` (OIDC + workload identity enabled)
-  - ACR: `<acr-name>`
-  - Managed identity: `<managed-identity-name>`
-  - Federated credential: `<federated-credential-name>`
-- Deployed app to namespace `agent-tracing-demo` with 2 replicas and successful rollout.
+### Graph Nodes
+- `user_proxy` → `orchestrator` → `retrieve_context` → `draft_plan` → `run_tools` → `evaluate_constraints` → `replan` (optional) → `finalize`
 
-### Trace Validation
-- Queried App Insights and confirmed full trace tree for deployed AKS invocation.
-- Verified spans include:
-  - `invoke_agent` (request root)
-  - `gen_ai.chat` spans
-  - tool spans (`gen_ai.operation.name=execute_tool`)
-  - retriever spans
-  - `goto_triggered` event
+### Tools
+- **search_flights** - Deterministic flight search across 6 destinations with economy/business/budget classes
+- **search_hotels** - Deterministic hotel search with budget/mid/luxury tiers
+- **get_destination_weather** - Weather forecasts for travel destinations
+- **estimate_trip_cost** - Full trip cost estimation (flights + hotels + activities)
+
+### Destinations Supported
+Paris, Tokyo, Cancun, Bali, New York, Barcelona
 
 ## Repo Layout
 
-- `app/server.py` - API + request tracing context extraction
-- `app/graph.py` - workflow graph, `goto` routing, node-level span attributes/events
+- `app/server.py` - FastAPI endpoints + request tracing context extraction
+- `app/graph.py` - LangGraph workflow with travel agent nodes and `goto` routing
 - `app/model.py` - Azure OpenAI GPT-4.1 deployment config
-- `app/tools.py` - deterministic tools
-- `app/retriever.py` - deterministic retriever
+- `app/tools.py` - Deterministic travel tools (flights, hotels, weather, cost)
+- `app/retriever.py` - Offline travel knowledge retriever
+- `app/schemas.py` - Pydantic request/response models with travel constraints
 - `app/telemetry.py` - OTel + callback tracer setup
-- `k8s/` - AKS manifests (namespace/service/deployment/ingress/hpa/pdb/config/secret)
-- `tests/` - smoke/unit tests and optional trace query test
+- `data/corpus.jsonl` - Travel destination knowledge base
+- `k8s/` - AKS manifests
+- `tests/` - Smoke/unit tests
+
+## API Endpoints
+
+- `POST /invoke` - Plan a trip (main endpoint)
+- `GET /healthz` - Health check
+- `GET /readyz` - Readiness check
+- `GET /version` - Build info
+- `GET /debug/telemetry` - Telemetry config
+
+### Example `/invoke` Request
+
+```json
+{
+  "input": {
+    "messages": [{"role": "user", "content": "Plan a 5-day trip to Paris for 2 people"}]
+  },
+  "constraints": {
+    "budget_usd": 3000,
+    "days": 5,
+    "destination": "Paris",
+    "travelers": 2,
+    "travel_style": "mid",
+    "dates": ["2026-06-10", "2026-06-11", "2026-06-12", "2026-06-13", "2026-06-14"]
+  },
+  "options": {"record_content": false, "force_goto_path": false}
+}
+```
 
 ## Environment and Secrets
-
-Create local env file:
 
 ```bash
 cp .env.example .env
 ```
-
-Where to add keys:
-- Local: `.env`
-- AKS runtime: `k8s/secret.yaml` (or external secret manager)
-- CI/CD: GitHub repository secrets
 
 Required variables:
 - `AZURE_OPENAI_ENDPOINT`
@@ -84,22 +90,12 @@ python3 -m pytest
 uvicorn app.server:app --host 0.0.0.0 --port 8080
 ```
 
-## AKS Deployment Template Values
-
-Before deployment, set these values for your environment:
-- Image: `<acr-name>.azurecr.io/langgraph-workflow-agent:<tag>`
-- AOAI endpoint: `https://<your-azure-openai-resource>.cognitiveservices.azure.com`
-- API version: `<azure-openai-api-version>`
-- Workload identity client ID in `k8s/serviceaccount.yaml`
-
-Never commit real secrets or tenant-specific key material.
-
 ## Trace Semantics Expected
 
 One `/invoke` should show:
 - root request span (`invoke_agent`)
 - child `gen_ai.chat` spans for `draft_plan`, `replan`, `finalize`
-- tool execution spans
+- tool execution spans (`search_flights`, `search_hotels`, `get_destination_weather`, `estimate_trip_cost`)
 - retriever span with query/result attributes
 - custom attributes/events (`app.node_name`, `app.route_decision`, `biz.request_id`, `goto_triggered`)
 
@@ -107,30 +103,4 @@ One `/invoke` should show:
 
 - `OTEL_RECORD_CONTENT=false` is the default.
 - Sampler setting uses `parentbased_trace_id_ratio`.
-- See **[SETUP_GUIDE.md](./SETUP_GUIDE.md)** for complete reproducible commands and verification queries.
-
-## FAQ (for users and AI agents)
-
-### 1) How do I confirm the service is actually using GPT-4.1?
-Check App Insights dependency spans for `gen_ai.response.model` and your configured deployment in `AZURE_OPENAI_CHAT_DEPLOYMENT`.
-
-### 2) Why do I see both `gen_ai.chat` and `chat gpt-4.1-*` spans?
-`gen_ai.chat` is the app-level semantic span; `chat gpt-4.1-*` is provider/client-level detail span from the SDK callbacks.
-
-### 3) How do I force the `goto` path for demos?
-Set `options.force_goto_path=true` in `/invoke` or set `DEMO_FORCE_GOTO=true` for environment-level forcing.
-
-### 4) Why do traces look flat sometimes?
-This usually happens when work is executed outside the graph run context. Keep nested LLM/tool/retriever calls inside graph nodes.
-
-### 5) Why are traces missing entirely?
-Common causes: missing `APPLICATION_INSIGHTS_CONNECTION_STRING`, blocked egress, or misconfigured sampler.
-
-### 6) How do I keep telemetry safe?
-Keep `OTEL_RECORD_CONTENT=false` in shared/prod environments; only enable content capture for controlled debugging.
-
-### 7) What should I preserve if another AI updates this repo?
-Do not remove node-level span attributes/events (`app.node_name`, `app.route_decision`, `biz.request_id`, `goto_triggered`) or deterministic tool/retriever behavior.
-
-### 8) How do I rotate config without rebuilding image?
-Update ConfigMap/Secret values and redeploy/restart pods; image rebuild is not required for env-only changes.
+- Set `options.force_goto_path=true` or `DEMO_FORCE_GOTO=true` to force the replan path for demos.
