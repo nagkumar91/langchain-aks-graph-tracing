@@ -132,6 +132,9 @@ def create_langchain_callbacks(record_content: bool) -> list[Any]:
         LOGGER.warning("APPLICATION_INSIGHTS_CONNECTION_STRING not set; tracing callbacks disabled.")
         return []
 
+    # The tracer detects our already-configured TracerProvider and skips
+    # configure_azure_monitor() automatically (PR langchain-ai/langchain-azure#398).
+    # We still pass the connection_string so it can fall back if no provider is set.
     tracer = AzureAIOpenTelemetryTracer(
         connection_string=connection_string,
         enable_content_recording=record_content,
