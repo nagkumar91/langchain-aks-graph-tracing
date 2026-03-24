@@ -100,6 +100,15 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
         traceparent = headers.get("traceparent", "")
         tracestate = headers.get("tracestate", "")
 
+        # Capture custom metadata-* headers for propagation to Azure Monitor.
+        # The AzureAIOpenTelemetryTracer auto-propagates any metadata key
+        # prefixed with "gen_ai." as span attributes (visible in customDimensions).
+        custom_metadata: dict[str, str] = {}
+        for key, value in headers.items():
+            if key.startswith("metadata-"):
+                attr_name = key.replace("-", "_")
+                custom_metadata[attr_name] = value
+
         metadata = {
             "request_id": request_id,
             "user_id": payload.user_id,
@@ -112,6 +121,11 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
             "otel_agent_span": True,
             "thread_id": request_id,
         }
+        # Inject custom headers both as raw metadata and as gen_ai.* attributes
+        # so the tracer sets them as span attributes in Azure Monitor.
+        for attr_name, value in custom_metadata.items():
+            metadata[attr_name] = value
+            metadata[f"gen_ai.custom.{attr_name}"] = value
         initial_state = {
             "thread": {"messages": [message.model_dump() for message in payload.input.messages]},
             "constraints": payload.constraints.model_dump(),
