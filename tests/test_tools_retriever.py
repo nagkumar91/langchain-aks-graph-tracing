@@ -3,7 +3,7 @@ from app.tools import estimate_cost, get_weather
 
 
 def test_get_weather_is_deterministic() -> None:
-    result = get_weather("Seattle", ["2026-05-20", "2026-05-21"])
+    result = get_weather.invoke({"location": "Seattle", "dates": ["2026-05-20", "2026-05-21"]})
     assert result["location"] == "Seattle"
     assert result["daily"][0]["condition"] == "rain"
     assert "deterministic" in result["summary"].lower()
@@ -16,7 +16,8 @@ def test_estimate_cost_marks_budget_status() -> None:
             {"activity": "Museum Day", "type": "indoor", "budget_friendly": True},
         ]
     }
-    result = estimate_cost(plan, days=2, budget_usd=200.0)
+    import json
+    result = estimate_cost.invoke({"plan_json": json.dumps(plan), "days": 2, "budget_usd": 200.0})
     assert result["estimate_usd"] > 0
     assert result["within_budget"] is False
 

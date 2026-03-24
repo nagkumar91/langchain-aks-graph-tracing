@@ -4,13 +4,13 @@ import json
 import os
 from typing import Any, TypedDict
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from app.retriever import OfflineRetriever
-from app.tools import execute_tool
+from app.tools import TOOL_LIST, TOOLS_BY_NAME
 
 
 class WorkflowState(TypedDict, total=False):
@@ -99,11 +99,49 @@ def _invoke_chat(
     return _as_text(response)
 
 
+def _invoke_with_tools(
+    llm_with_tools: Any,
+    system_prompt: str,
+    user_content: str,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Call the LLM with bound tools. Execute any tool_calls the model makes
+    and feed results back, collecting all tool outputs."""
+    messages: list[Any] = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_content),
+    ]
+    collected: dict[str, Any] = {}
+
+    for _ in range(5):  # max iterations to prevent infinite loops
+        response: AIMessage = llm_with_tools.invoke(messages, config=config)
+        messages.append(response)
+
+        if not response.tool_calls:
+            break
+
+        for tc in response.tool_calls:
+            tool_fn = TOOLS_BY_NAME.get(tc["name"])
+            if tool_fn is None:
+                result = {"error": f"Unknown tool: {tc['name']}"}
+            else:
+                result = tool_fn.invoke(tc["args"])
+            collected[tc["name"]] = result
+            messages.append(
+                ToolMessage(content=json.dumps(result, default=str), tool_call_id=tc["id"])
+            )
+
+    return collected
+
+
 def build_graph(
     *,
     llm: Any,
     retriever: OfflineRetriever,
 ) -> Any:
+    # LLM with tools bound — produces gen_ai.tool.definitions on chat spans
+    llm_with_tools = llm.bind_tools(TOOL_LIST)
+
     builder = StateGraph(WorkflowState)
 
     def user_proxy(state: WorkflowState) -> WorkflowState:
@@ -146,27 +184,30 @@ def build_graph(
         plan = parsed if parsed.get("itinerary") else _fallback_plan(state, budget_mode=False)
         return {"draft_plan": plan}
 
-    def run_tools(state: WorkflowState) -> WorkflowState:
+    def run_tools(state: WorkflowState, config: RunnableConfig) -> WorkflowState:
+        """Use LLM tool-calling: the model receives tool definitions, decides
+        which tools to call, and the results are fed back automatically."""
         constraints = state.get("constraints", {})
-        metadata = state.get("metadata", {})
-        record_content = bool(metadata.get("record_content", False))
-        weather = execute_tool(
-            "get_weather",
-            {
-                "location": constraints.get("location", "Seattle"),
-                "dates": constraints.get("dates", []),
-            },
-            record_content=record_content,
+        plan = state.get("draft_plan", {})
+        prompt = (
+            "You are a travel planning assistant with access to tools. "
+            "Use the get_weather tool to check weather for the destination, "
+            "and the estimate_cost tool to estimate the trip cost. "
+            "You MUST call both tools."
         )
-        cost = execute_tool(
-            "estimate_cost",
-            {
-                "plan": state.get("draft_plan", {}),
-                "days": int(constraints.get("days", 2)),
-                "budget_usd": float(constraints.get("budget_usd", 500)),
-            },
-            record_content=record_content,
-        )
+        user_msg = json.dumps({
+            "location": constraints.get("location", "Seattle"),
+            "dates": constraints.get("dates", []),
+            "plan": plan,
+            "days": int(constraints.get("days", 2)),
+            "budget_usd": float(constraints.get("budget_usd", 500)),
+        })
+
+        collected = _invoke_with_tools(llm_with_tools, prompt, user_msg, config)
+
+        # Ensure we have both outputs even if the LLM skipped a tool
+        weather = collected.get("get_weather", {"summary": "No weather data."})
+        cost = collected.get("estimate_cost", {"estimate_usd": 0, "within_budget": True})
         return {"tool_outputs": {"weather": weather, "cost": cost}}
 
     def evaluate_constraints(state: WorkflowState) -> WorkflowState | Command:

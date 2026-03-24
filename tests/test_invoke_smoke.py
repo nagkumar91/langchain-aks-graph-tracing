@@ -7,7 +7,17 @@ from app.server import create_app
 
 
 class StubLLM:
-    def invoke(self, messages, config=None):  # noqa: ANN001
+    """Stub that supports bind_tools() and returns appropriate responses."""
+
+    def __init__(self):
+        self._tools = None
+
+    def bind_tools(self, tools):
+        bound = StubLLM()
+        bound._tools = tools
+        return bound
+
+    def invoke(self, messages, config=None, **kwargs):  # noqa: ANN001
         system = messages[0].content
         if "NODE:draft_plan" in system:
             return AIMessage(
@@ -53,6 +63,33 @@ class StubLLM:
                     }
                 )
             )
+        # For run_tools node: if tools are bound, simulate tool_calls then
+        # return a final message after tool results are fed back.
+        if self._tools and "MUST call both tools" in system:
+            # Check if we already have ToolMessage in the conversation
+            has_tool_results = any(
+                getattr(m, "type", None) == "tool" or
+                (hasattr(m, "content") and isinstance(m, type) is False and
+                 getattr(type(m), "__name__", "") == "ToolMessage")
+                for m in messages
+            )
+            if not has_tool_results:
+                return AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_weather_1",
+                            "name": "get_weather",
+                            "args": {"location": "Seattle", "dates": ["2026-05-20", "2026-05-21"]},
+                        },
+                        {
+                            "id": "call_cost_1",
+                            "name": "estimate_cost",
+                            "args": {"plan_json": "{}", "days": 2, "budget_usd": 120.0},
+                        },
+                    ],
+                )
+            return AIMessage(content="Tools executed successfully.")
         return AIMessage(content="Here is your finalized itinerary and rationale.")
 
 

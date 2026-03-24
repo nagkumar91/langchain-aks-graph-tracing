@@ -3,10 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from langchain_core.tools import StructuredTool
-from opentelemetry import trace
-
-TRACER = trace.get_tracer(__name__)
+from langchain_core.tools import StructuredTool, tool
 
 WEATHER_TABLE = {
     "seattle": {
@@ -28,7 +25,9 @@ ACTIVITY_BASE_COST = {
 }
 
 
+@tool
 def get_weather(location: str, dates: list[str]) -> dict[str, Any]:
+    """Get weather forecast for a location and list of dates. Returns daily conditions, highs, lows, and a summary."""
     normalized_location = location.strip().lower()
     table = WEATHER_TABLE.get(normalized_location, {})
     daily = []
@@ -47,7 +46,13 @@ def get_weather(location: str, dates: list[str]) -> dict[str, Any]:
     }
 
 
-def estimate_cost(plan: dict[str, Any], days: int, budget_usd: float) -> dict[str, Any]:
+@tool
+def estimate_cost(plan_json: str, days: int, budget_usd: float) -> dict[str, Any]:
+    """Estimate the total cost of a travel plan. Pass the plan as a JSON string with an 'itinerary' list. Returns estimate_usd, within_budget, and line_items."""
+    try:
+        plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
+    except (json.JSONDecodeError, TypeError):
+        plan = {}
     itinerary = plan.get("itinerary", [])
     if not itinerary:
         estimated = float(days) * 120.0
@@ -81,36 +86,5 @@ def estimate_cost(plan: dict[str, Any], days: int, budget_usd: float) -> dict[st
     }
 
 
-GET_WEATHER_TOOL = StructuredTool.from_function(
-    func=get_weather,
-    name="get_weather",
-    description="Deterministic weather tool for location and date range.",
-)
-ESTIMATE_COST_TOOL = StructuredTool.from_function(
-    func=estimate_cost,
-    name="estimate_cost",
-    description="Deterministic budget estimator for itinerary plans.",
-)
-
-TOOLS = {
-    GET_WEATHER_TOOL.name: GET_WEATHER_TOOL,
-    ESTIMATE_COST_TOOL.name: ESTIMATE_COST_TOOL,
-}
-
-
-def execute_tool(
-    tool_name: str,
-    args: dict[str, Any],
-    *,
-    record_content: bool = False,
-) -> dict[str, Any]:
-    tool = TOOLS[tool_name]
-    with TRACER.start_as_current_span(f"tool.{tool_name}") as span:
-        span.set_attribute("gen_ai.operation.name", "execute_tool")
-        span.set_attribute("gen_ai.tool.name", tool_name)
-        if record_content:
-            span.set_attribute("gen_ai.tool.call.arguments", json.dumps(args, sort_keys=True))
-        result = tool.invoke(args)
-        if record_content:
-            span.set_attribute("gen_ai.tool.result", json.dumps(result, sort_keys=True))
-        return result
+TOOL_LIST = [get_weather, estimate_cost]
+TOOLS_BY_NAME = {t.name: t for t in TOOL_LIST}
