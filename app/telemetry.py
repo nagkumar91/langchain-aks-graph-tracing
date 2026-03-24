@@ -98,6 +98,17 @@ def initialize_tracing() -> TelemetryConfig:
         )
     trace.set_tracer_provider(provider)
 
+    # Instrument FastAPI/ASGI so inbound HTTP requests produce server spans
+    # that carry the incoming traceparent as the root of the trace.
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+        FastAPIInstrumentor.instrument(tracer_provider=provider)
+    except ImportError:
+        LOGGER.warning("opentelemetry-instrumentation-fastapi not installed; HTTP spans disabled.")
+    except Exception:
+        LOGGER.debug("FastAPI instrumentor already active or failed.", exc_info=True)
+
     try:
         from langchain_azure_ai.callbacks.tracers.inference_tracing import (  # noqa: F401
             AzureAIOpenTelemetryTracer,

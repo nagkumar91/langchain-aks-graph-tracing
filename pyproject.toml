@@ -18,6 +18,7 @@ dependencies = [
   "opentelemetry-api>=1.27.0",
   "opentelemetry-sdk>=1.27.0",
   "azure-monitor-opentelemetry-exporter>=1.0.0b30",
+  "opentelemetry-instrumentation-fastapi>=0.45b0",
   "azure-identity>=1.17.1",
   "pydantic>=2.8.2",
 ]
