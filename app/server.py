@@ -97,7 +97,6 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
         record_content = _record_content(runtime, payload.options.record_content)
 
         headers = {key.lower(): value for key, value in request.headers.items()}
-        traceparent = headers.get("traceparent", "")
 
         # Capture custom metadata-* headers for propagation to Azure Monitor.
         custom_metadata: dict[str, str] = {}
@@ -113,7 +112,17 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
             "record_content": record_content,
             "force_goto_path": payload.options.force_goto_path,
             "agent_name": "zava-travel-agent",
+            "otel_agent_span": True,
+            "thread_id": request_id,
         }
+        # Pass traceparent/tracestate so the AzureAIOpenTelemetryTracer can
+        # parent agent spans under the incoming trace context (e.g. from APIM).
+        traceparent = headers.get("traceparent", "")
+        if traceparent:
+            metadata["traceparent"] = traceparent
+            tracestate = headers.get("tracestate", "")
+            if tracestate:
+                metadata["tracestate"] = tracestate
         # Inject custom headers as gen_ai.custom.* attributes
         for attr_name, value in custom_metadata.items():
             metadata[attr_name] = value
