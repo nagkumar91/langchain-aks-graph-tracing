@@ -1,79 +1,70 @@
-# Custom LangGraph Workflow Agent (AKS + GPT-4.1 + GenAI Tracing)
+# LangGraph Workflow Agent (AKS + GPT-4.1 + GenAI Tracing)
 
-This repo hosts a containerized FastAPI service with a custom LangGraph workflow (`goto` replan path), deterministic tools/retriever, GPT-4.1 Azure OpenAI calls, and OpenTelemetry GenAI tracing to Application Insights.
+A containerized FastAPI service with a custom LangGraph workflow (`goto` replan path), **LLM-driven tool-calling** (`bind_tools`), deterministic retriever, GPT-4.1 Azure OpenAI, and full OpenTelemetry GenAI tracing to Application Insights via `configure_azure_monitor()`.
 
-For full step-by-step commands, use **[SETUP_GUIDE.md](./SETUP_GUIDE.md)**.
+For full step-by-step commands, see **[SETUP_GUIDE.md](./SETUP_GUIDE.md)**.
 
-## What Was Completed
+## Architecture
 
-### Application
-- Implemented explicit LangGraph nodes and edges: `user_proxy`, `orchestrator`, `retrieve_context`, `draft_plan`, `run_tools`, `evaluate_constraints`, `replan`, `finalize`.
-- Implemented `Command(goto="replan", update=...)` branch logic with `goto_triggered` telemetry event.
-- Added deterministic offline tools (`get_weather`, `estimate_cost`) and offline retriever corpus.
-- Added `/invoke`, `/healthz`, `/readyz`, `/version`, `/debug/telemetry`.
-- Added trace context extraction (`traceparent`/`tracestate`) and parent-child correlation.
+### Graph Nodes
+```
+user_proxy → orchestrator → retrieve_context → draft_plan → run_tools → evaluate_constraints → finalize
+                                                                ↑              │ (goto)
+                                                                └── replan ←───┘
+```
 
-### Dependency and Local Validation
-- Local environment runs with `python3` + virtualenv.
-- Installed `langchain-azure-ai[opentelemetry]` from branch:
-  - repo: `<your-langchain-azure-fork-url>`
-  - ref: `<your-feature-branch>`
-  - commit: `<commit-sha>`
-- Local validation passed:
-  - `python3 -m compileall app`
-  - `python3 -m pytest` (`5 passed`, `1 skipped`)
-  - local `/invoke` smoke with traceparent correlation
+### LLM Tool-Calling
+The `run_tools` node uses `llm.bind_tools([get_weather, estimate_cost])` so the LLM receives tool schemas and decides which tools to call. This produces `gen_ai.tool.definitions` on chat spans in App Insights.
 
-### Azure and AKS Provisioning
-- Resource group used: `<resource-group-name>`
-- App Insights resource:
-  - `/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/microsoft.insights/components/<app-insights-name>`
-- Created:
-  - AKS: `<aks-name>` (OIDC + workload identity enabled)
-  - ACR: `<acr-name>`
-  - Managed identity: `<managed-identity-name>`
-  - Federated credential: `<federated-credential-name>`
-- Deployed app to namespace `agent-tracing-demo` with 2 replicas and successful rollout.
+### Custom Metadata Headers
+Pass any `metadata-*` HTTP header on `/invoke` — they're injected as `gen_ai.custom.*` span attributes and appear as `customDimensions` in Azure Monitor.
 
-### Trace Validation
-- Queried App Insights and confirmed full trace tree for deployed AKS invocation.
-- Verified spans include:
-  - `invoke_agent` (request root)
-  - `gen_ai.chat` spans
-  - tool spans (`gen_ai.operation.name=execute_tool`)
-  - retriever spans
-  - `goto_triggered` event
+### Telemetry Stack
+- `configure_azure_monitor()` — handles FastAPI HTTP spans, trace export, and LiveMetrics
+- `AzureAIOpenTelemetryTracer` (from `langchain-azure-ai`) — GenAI spans for agent nodes, LLM calls, tool calls, retriever
+
+## Trace Semantics
+
+One `/invoke` produces these span types in App Insights:
+
+| Span | Type | Key Attributes |
+|------|------|----------------|
+| `invoke_agent langgraph-workflow-agent` | dependency | `gen_ai.agent.name`, `gen_ai.custom.*` metadata |
+| `invoke_agent {node}` | dependency | Per-node: user_proxy, orchestrator, retrieve_context, etc. |
+| `chat gpt-4.1-*` | dependency | `gen_ai.tool.definitions`, `gen_ai.input.messages`, `gen_ai.output.messages` |
+| `execute_tool get_weather` | dependency | `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` |
+| `execute_tool estimate_cost` | dependency | `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` |
 
 ## Repo Layout
 
-- `app/server.py` - API + request tracing context extraction
-- `app/graph.py` - workflow graph, `goto` routing, node-level span attributes/events
-- `app/model.py` - Azure OpenAI GPT-4.1 deployment config
-- `app/tools.py` - deterministic tools
-- `app/retriever.py` - deterministic retriever
-- `app/telemetry.py` - OTel + callback tracer setup
-- `k8s/` - AKS manifests (namespace/service/deployment/ingress/hpa/pdb/config/secret)
-- `tests/` - smoke/unit tests and optional trace query test
+- `app/server.py` — FastAPI endpoints, metadata header extraction, traceparent propagation
+- `app/graph.py` — LangGraph workflow with `bind_tools()` and `goto` routing
+- `app/tools.py` — Deterministic tools (`@tool` decorated for LLM tool-calling)
+- `app/model.py` — Azure OpenAI GPT-4.1 deployment config
+- `app/retriever.py` — Offline keyword retriever with corpus
+- `app/telemetry.py` — `configure_azure_monitor()` + `AzureAIOpenTelemetryTracer` callback setup
+- `data/corpus.jsonl` — Travel knowledge base
+- `k8s/` — AKS manifests
+- `tests/` — Smoke/unit tests
 
-## Environment and Secrets
-
-Create local env file:
+## Environment Variables
 
 ```bash
 cp .env.example .env
 ```
 
-Where to add keys:
-- Local: `.env`
-- AKS runtime: `k8s/secret.yaml` (or external secret manager)
-- CI/CD: GitHub repository secrets
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AZURE_OPENAI_ENDPOINT` | ✅ | Azure OpenAI resource endpoint |
+| `AZURE_OPENAI_CHAT_DEPLOYMENT` | ✅ | GPT-4.1 deployment name |
+| `AZURE_OPENAI_API_KEY` | ✅* | API key (*or use managed identity) |
+| `APPLICATION_INSIGHTS_CONNECTION_STRING` | ✅ | App Insights connection string |
+| `OTEL_SERVICE_NAME` | | Default: `langgraph-workflow-agent` |
+| `OTEL_TRACES_SAMPLER` | | Default: `parentbased_trace_id_ratio` (use `always_on` for demos) |
+| `OTEL_TRACES_SAMPLER_ARG` | | Default: `1.0` (set to `0.1` for 10% sampling in prod) |
+| `DEMO_FORCE_GOTO` | | Set `true` to force the replan path |
 
-Required variables:
-- `AZURE_OPENAI_ENDPOINT`
-- `AZURE_OPENAI_CHAT_DEPLOYMENT`
-- `APPLICATION_INSIGHTS_CONNECTION_STRING`
-
-## Local Run (Quick)
+## Local Run
 
 ```bash
 python3 -m venv .venv
@@ -81,56 +72,45 @@ source .venv/bin/activate
 set -a && source .env && set +a
 python3 -m pip install -e .[dev]
 python3 -m pytest
+export OTEL_TRACES_SAMPLER=always_on  # 100% sampling for demos
 uvicorn app.server:app --host 0.0.0.0 --port 8080
 ```
 
-## AKS Deployment Template Values
+## Example Curl
 
-Before deployment, set these values for your environment:
-- Image: `<acr-name>.azurecr.io/langgraph-workflow-agent:<tag>`
-- AOAI endpoint: `https://<your-azure-openai-resource>.cognitiveservices.azure.com`
-- API version: `<azure-openai-api-version>`
-- Workload identity client ID in `k8s/serviceaccount.yaml`
+```bash
+curl -X POST http://localhost:8080/invoke \
+  -H "Content-Type: application/json" \
+  -H "traceparent: 00-aaaabbbbccccddddeeee111122223333-ff00ff00ff00ff00-01" \
+  -H "metadata-client-region: us-west-2" \
+  -H "metadata-session-id: sess-abc-123" \
+  -H "metadata-experiment-id: exp-42" \
+  -d '{
+    "input": {"messages": [{"role":"user","content":"Plan a 2-day Seattle trip on a tight budget."}]},
+    "constraints": {"budget_usd":100,"days":2,"location":"Seattle","dates":["2026-05-20","2026-05-21"]},
+    "options": {"record_content":true,"force_goto_path":true}
+  }'
+```
 
-Never commit real secrets or tenant-specific key material.
+## KQL Query (App Insights → Logs)
 
-## Trace Semantics Expected
+```kql
+union dependencies, requests
+| where operation_Id == '<trace-id-from-response>'
+| project TimeGenerated, itemType, name, duration,
+          customDimensions["gen_ai.operation.name"],
+          customDimensions["gen_ai.agent.name"],
+          customDimensions["gen_ai.tool.definitions"],
+          customDimensions["gen_ai.custom.metadata_client_region"]
+| order by TimeGenerated asc
+```
 
-One `/invoke` should show:
-- root request span (`invoke_agent`)
-- child `gen_ai.chat` spans for `draft_plan`, `replan`, `finalize`
-- tool execution spans
-- retriever span with query/result attributes
-- custom attributes/events (`app.node_name`, `app.route_decision`, `biz.request_id`, `goto_triggered`)
+## API Endpoints
 
-## Notes
-
-- `OTEL_RECORD_CONTENT=false` is the default.
-- Sampler setting uses `parentbased_trace_id_ratio`.
-- See **[SETUP_GUIDE.md](./SETUP_GUIDE.md)** for complete reproducible commands and verification queries.
-
-## FAQ (for users and AI agents)
-
-### 1) How do I confirm the service is actually using GPT-4.1?
-Check App Insights dependency spans for `gen_ai.response.model` and your configured deployment in `AZURE_OPENAI_CHAT_DEPLOYMENT`.
-
-### 2) Why do I see both `gen_ai.chat` and `chat gpt-4.1-*` spans?
-`gen_ai.chat` is the app-level semantic span; `chat gpt-4.1-*` is provider/client-level detail span from the SDK callbacks.
-
-### 3) How do I force the `goto` path for demos?
-Set `options.force_goto_path=true` in `/invoke` or set `DEMO_FORCE_GOTO=true` for environment-level forcing.
-
-### 4) Why do traces look flat sometimes?
-This usually happens when work is executed outside the graph run context. Keep nested LLM/tool/retriever calls inside graph nodes.
-
-### 5) Why are traces missing entirely?
-Common causes: missing `APPLICATION_INSIGHTS_CONNECTION_STRING`, blocked egress, or misconfigured sampler.
-
-### 6) How do I keep telemetry safe?
-Keep `OTEL_RECORD_CONTENT=false` in shared/prod environments; only enable content capture for controlled debugging.
-
-### 7) What should I preserve if another AI updates this repo?
-Do not remove node-level span attributes/events (`app.node_name`, `app.route_decision`, `biz.request_id`, `goto_triggered`) or deterministic tool/retriever behavior.
-
-### 8) How do I rotate config without rebuilding image?
-Update ConfigMap/Secret values and redeploy/restart pods; image rebuild is not required for env-only changes.
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/invoke` | Plan a trip (main endpoint) |
+| GET | `/healthz` | Health check |
+| GET | `/readyz` | Readiness check |
+| GET | `/version` | Build info |
+| GET | `/debug/telemetry` | Telemetry config |

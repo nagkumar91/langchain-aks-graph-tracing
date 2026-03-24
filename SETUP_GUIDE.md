@@ -1,56 +1,35 @@
 # Setup Guide: Local + AKS + App Insights Validation
 
-This guide documents the exact workflow used to stand up and validate the LangGraph tracing demo.
-
 ## 1) Prerequisites
 
 - Python 3.11+ (`python3`)
-- Azure CLI (`az`) authenticated to subscription:
-  - `<subscription-id>`
-- `kubectl`
-- Access to resource group:
-  - `<resource-group-name>`
+- Azure CLI (`az`) authenticated
+- `kubectl` (for AKS deployment)
+- Azure OpenAI resource with GPT-4.1 deployment
+- App Insights resource
 
 ## 2) Local Environment Setup
 
 ```bash
 cp .env.example .env
+# Fill in: AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_CHAT_DEPLOYMENT,
+#          AZURE_OPENAI_API_KEY, APPLICATION_INSIGHTS_CONNECTION_STRING
+
 python3 -m venv .venv
 source .venv/bin/activate
 set -a && source .env && set +a
 python3 -m pip install -e .[dev]
 ```
 
-### Keys/Secrets Placement
+### Dependency: langchain-azure-ai
 
-- Local runtime secrets: `.env`
-- AKS runtime secrets: `k8s/secret.yaml` or `kubectl create secret ...`
-- CI/CD secrets: GitHub repository secrets
-
-## 3) Install `langchain-azure-ai[opentelemetry]`
+Installed from `langchain-ai/langchain-azure` main branch:
 
 ```bash
-source .venv/bin/activate
-python3 -m pip install -U "langchain-azure-ai[opentelemetry]"
+pip install "langchain-azure-ai[opentelemetry] @ git+https://github.com/langchain-ai/langchain-azure.git@main#subdirectory=libs/azure-ai"
 ```
 
-Verification command:
-
-```bash
-source .venv/bin/activate
-python3 - <<'PY'
-import importlib.metadata as m
-d = m.distribution("langchain-azure-ai")
-print(d.read_text("direct_url.json"))
-PY
-```
-
-Expected:
-- URL points to `nagkumar91/langchain-azure.git`
-- Requested revision is `copilot/implement-compatibility-improvements`
-- Commit SHA matches the expected branch head
-
-## 4) Local Validation
+## 3) Local Validation
 
 ```bash
 source .venv/bin/activate
@@ -59,189 +38,129 @@ python3 -m compileall app
 python3 -m pytest
 ```
 
-Local smoke invoke example:
+## 4) Run the Server
 
 ```bash
-curl -s http://localhost:8080/invoke \
-  -H 'content-type: application/json' \
-  -H 'traceparent: 00-11111111111111111111111111111111-2222222222222222-01' \
+# Use always_on sampler for demos (100% sampling):
+export OTEL_TRACES_SAMPLER=always_on
+uvicorn app.server:app --host 0.0.0.0 --port 8080
+```
+
+## 5) Invoke with Trace Headers
+
+```bash
+curl -X POST http://localhost:8080/invoke \
+  -H "Content-Type: application/json" \
+  -H "traceparent: 00-aaaabbbbccccddddeeee111122223333-ff00ff00ff00ff00-01" \
+  -H "metadata-client-region: us-west-2" \
+  -H "metadata-session-id: sess-abc-123" \
+  -H "metadata-experiment-id: exp-42" \
   -d '{
-    "input": {"messages":[{"role":"user","content":"Plan a 2-day Seattle itinerary under $120 with rain backup."}]},
-    "constraints":{"budget_usd":120,"days":2,"location":"Seattle","dates":["2026-05-20","2026-05-21"]},
-    "options":{"record_content":false,"force_goto_path":true}
+    "input": {"messages":[{"role":"user","content":"Plan a 2-day Seattle itinerary under $100 with rain backup."}]},
+    "constraints":{"budget_usd":100,"days":2,"location":"Seattle","dates":["2026-05-20","2026-05-21"]},
+    "options":{"record_content":true,"force_goto_path":true}
   }'
 ```
 
-## 5) Azure Resource Provisioning (Performed)
+Expected:
+- HTTP 200
+- `output.debug.route_taken = replan_then_finalize` (goto path)
+- `telemetry.trace_id` matches the traceparent header
+- Custom `metadata-*` headers flow as `gen_ai.custom.*` span attributes
 
-Resources created in `<resource-group-name>`:
-- AKS: `<aks-name>`
-- ACR: `<acr-name>`
-- Managed Identity: `<managed-identity-name>`
-- Federated Credential: `<federated-credential-name>`
+## 6) Telemetry Architecture
 
-Representative commands:
+```
+configure_azure_monitor()
+  └─ TracerProvider + BatchSpanProcessor → App Insights
+  └─ FastAPI auto-instrumentation (HTTP server spans)
+  └─ LiveMetrics / QuickPulse
 
-```bash
-az account set --subscription <subscription-id>
-az acr create -g <resource-group-name> -n <acr-name> --sku Standard --location <azure-region>
-az aks create -g <resource-group-name> -n <aks-name> \
-  --location <azure-region> \
-  --node-count 1 \
-  --node-vm-size Standard_D2s_v5 \
-  --enable-managed-identity \
-  --enable-oidc-issuer \
-  --enable-workload-identity \
-  --attach-acr <acr-name>
+AzureAIOpenTelemetryTracer (LangChain callback)
+  └─ invoke_agent spans (per LangGraph node)
+  └─ chat spans (with gen_ai.tool.definitions from bind_tools)
+  └─ execute_tool spans (tool call arguments + results)
 ```
 
-Workload identity setup:
+Key: `configure_azure_monitor()` runs first and sets up the global `TracerProvider`.
+The `AzureAIOpenTelemetryTracer` detects the existing provider and piggybacks on it
+(no duplicate provider — see PR langchain-ai/langchain-azure#398).
 
-```bash
-az identity create -g <resource-group-name> -n <managed-identity-name> --location <azure-region>
-az identity federated-credential create \
-  -g <resource-group-name> \
-  --identity-name <managed-identity-name> \
-  -n <federated-credential-name> \
-  --issuer "<AKS_OIDC_ISSUER_URL>" \
-  --subject "system:serviceaccount:agent-tracing-demo:workflow-agent-sa" \
-  --audiences api://AzureADTokenExchange
+## 7) Query Traces in App Insights
+
+### Via Azure Portal
+Go to App Insights → Logs, run:
+
+```kql
+union dependencies, requests
+| where timestamp > ago(30m)
+| where customDimensions["gen_ai.operation.name"] == "invoke_agent"
+| project TimeGenerated, name, duration,
+          customDimensions["gen_ai.agent.name"],
+          customDimensions["gen_ai.tool.definitions"],
+          customDimensions["gen_ai.custom.metadata_client_region"]
+| order by TimeGenerated desc
+| take 20
 ```
 
-## 6) Manifest Wiring (Performed)
-
-Updated with real values:
-- `k8s/configmap.yaml`
-  - `AZURE_OPENAI_ENDPOINT=https://<your-azure-openai-resource>.cognitiveservices.azure.com`
-  - `AZURE_OPENAI_API_VERSION=<api-version>`
-- `k8s/deployment.yaml`
-  - image `<acr-name>.azurecr.io/langgraph-workflow-agent:<tag>`
-  - label `azure.workload.identity/use: "true"`
-- `k8s/serviceaccount.yaml`
-  - `azure.workload.identity/client-id` set to managed identity client ID
-
-## 7) Build and Deploy to AKS
-
-Because local Docker daemon may not be available, build in ACR:
+### Via az CLI
 
 ```bash
+az rest --method post \
+  --url "https://api.applicationinsights.io/v1/apps/<APP_ID>/query" \
+  --headers "Content-Type=application/json" \
+  --body '{"query": "union dependencies, requests | where operation_Id == '"'"'<TRACE_ID>'"'"' | project timestamp, itemType, name, duration, customDimensions | order by timestamp asc"}'
+```
+
+### Trace Shape (Observed)
+
+```
+invoke_agent langgraph-workflow-agent  (root, ~25s)
+├─ invoke_agent user_proxy
+├─ invoke_agent orchestrator
+├─ invoke_agent retrieve_context
+├─ invoke_agent draft_plan
+│  └─ chat gpt-4.1-2025-04-14         (draft LLM call)
+├─ invoke_agent run_tools              📋 gen_ai.tool.definitions
+│  ├─ chat gpt-4.1-2025-04-14         (LLM decides tool calls)
+│  ├─ execute_tool get_weather
+│  ├─ execute_tool estimate_cost
+│  └─ chat gpt-4.1-2025-04-14         (LLM receives tool results)
+├─ invoke_agent evaluate_constraints   → goto replan
+├─ invoke_agent replan
+│  └─ chat gpt-4.1-2025-04-14
+├─ invoke_agent run_tools              📋 gen_ai.tool.definitions (2nd pass)
+│  ├─ chat gpt-4.1-2025-04-14
+│  ├─ execute_tool get_weather
+│  ├─ execute_tool estimate_cost
+│  └─ chat gpt-4.1-2025-04-14
+├─ invoke_agent evaluate_constraints
+└─ invoke_agent finalize
+   └─ chat gpt-4.1-2025-04-14
+```
+
+## 8) AKS Deployment
+
+```bash
+# Build and push to ACR
 az acr build -r <acr-name> -t langgraph-workflow-agent:<tag> .
-az aks get-credentials -g <resource-group-name> -n <aks-name> --overwrite-existing
-kubectl apply -k k8s
-```
+az aks get-credentials -g <resource-group> -n <aks-name> --overwrite-existing
 
-Apply runtime secrets from local environment values:
-
-```bash
+# Apply secrets
 set -a && source .env && set +a
 kubectl -n agent-tracing-demo create secret generic workflow-agent-secrets \
   --from-literal=APPLICATION_INSIGHTS_CONNECTION_STRING="$APPLICATION_INSIGHTS_CONNECTION_STRING" \
   --from-literal=AZURE_OPENAI_API_KEY="${AZURE_OPENAI_API_KEY:-}" \
   --dry-run=client -o yaml | kubectl apply -f -
-```
 
-Rollout checks:
-
-```bash
+# Deploy
+kubectl apply -k k8s
 kubectl -n agent-tracing-demo rollout status deployment/workflow-agent --timeout=600s
-kubectl -n agent-tracing-demo get pods -o wide
-kubectl -n agent-tracing-demo get svc workflow-agent -o wide
 ```
 
-If pods are pending due to capacity, scale AKS node count:
+## 9) Notes
 
-```bash
-az aks scale -g <resource-group-name> -n <aks-name> --node-count 2
-```
-
-## 8) AKS Smoke Test + Trace Correlation
-
-Port-forward and invoke with explicit traceparent:
-
-```bash
-kubectl -n agent-tracing-demo port-forward svc/workflow-agent 18080:80
-```
-
-In another shell:
-
-```bash
-curl -s http://127.0.0.1:18080/invoke \
-  -H 'content-type: application/json' \
-  -H 'traceparent: 00-44444444444444444444444444444444-5555555555555555-01' \
-  -d '{
-    "input": {"messages":[{"role":"user","content":"Plan a 2-day Seattle itinerary under $120 with rain backup."}]},
-    "constraints":{"budget_usd":120,"days":2,"location":"Seattle","dates":["2026-05-20","2026-05-21"]},
-    "options":{"record_content":false,"force_goto_path":true}
-  }'
-```
-
-Expected response checks:
-- HTTP 200
-- `output.debug.route_taken = replan_then_finalize`
-- `telemetry.trace_id = 44444444444444444444444444444444`
-
-## 9) App Insights Trace Query
-
-Resource ID:
-
-`/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/microsoft.insights/components/<app-insights-name>`
-
-Example query:
-
-```bash
-az monitor app-insights query \
-  --ids "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/microsoft.insights/components/<app-insights-name>" \
-  --analytics-query "search \"44444444444444444444444444444444\" | project itemType, operation_Name, operation_Id, operation_ParentId, message, customDimensions | take 30" \
-  --offset 2h
-```
-
-Latest-run query (pulls the newest `invoke_agent` trace automatically):
-
-```bash
-az monitor app-insights query \
-  --ids "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/microsoft.insights/components/<app-insights-name>" \
-  --analytics-query "let latestTraceId = toscalar(requests | where operation_Name == 'invoke_agent' | top 1 by timestamp desc | project operation_Id); search * | where operation_Id == latestTraceId | project timestamp, itemType, operation_Name, operation_ParentId, message, customDimensions | order by timestamp asc | take 50" \
-  --offset 2h
-```
-
-### Trace Shape (Observed from Current Query, Redacted)
-
-The current live query shows this hierarchy pattern:
-
-1. `request` → `invoke_agent` (root span)
-2. `dependency` → `gen_ai.retriever` with:
-   - `retriever.query`
-   - `retriever.top_k`
-   - `retriever.result_count`
-3. `trace` event → `retriever_results`
-4. `dependency` → `gen_ai.chat` (`app.node_name=draft_plan`)
-5. `dependency` → `tool.get_weather` (`gen_ai.operation.name=execute_tool`)
-6. `dependency` → `tool.estimate_cost` (`gen_ai.operation.name=execute_tool`)
-7. `trace` event → `goto_triggered` (`from=evaluate_constraints`, `to=replan`)
-8. `dependency` → `gen_ai.chat` (`app.node_name=replan`)
-9. `dependency` → `gen_ai.chat` (`app.node_name=finalize`)
-
-Representative redacted row snippets:
-
-```text
-request    invoke_agent      parent=<incoming-parent-span-id>
-dependency gen_ai.retriever  parent=<workflow-span-id>
-trace      retriever_results parent=<retriever-span-id>
-dependency gen_ai.chat       customDimensions.app.node_name=draft_plan
-dependency tool.get_weather  customDimensions.gen_ai.operation.name=execute_tool
-trace      goto_triggered    customDimensions.reason=force_goto
-dependency gen_ai.chat       customDimensions.app.node_name=replan
-dependency gen_ai.chat       customDimensions.app.node_name=finalize
-```
-
-Expected records:
-- `request` with `operation_Name=invoke_agent`
-- `dependency` for `gen_ai.chat`, `tool.get_weather`, `tool.estimate_cost`, `gen_ai.retriever`
-- `trace` message `goto_triggered`
-
-## 10) Known Operational Notes
-
-- Conditional access can block some Graph-backed `az` operations; re-login may be required:
-  - `az login --tenant <tenant-id> --scope https://graph.microsoft.com//.default`
-- Keep `OTEL_RECORD_CONTENT=false` by default.
-- Replace ingress host/TLS in `k8s/ingress.yaml` before exposing public endpoint.
+- Set `OTEL_TRACES_SAMPLER=always_on` for demos; use `parentbased_trace_id_ratio` with `0.1` in prod.
+- `configure_azure_monitor()` auto-instruments FastAPI — no manual HTTP span creation needed.
+- Custom `metadata-*` headers are mapped to `gen_ai.custom.*` keys in LangChain metadata, which the tracer sets as span attributes.
+- The `langchain-azure-ai` tracer's `_configure_azure_monitor()` detects the existing provider and skips duplicate setup.
