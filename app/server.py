@@ -115,8 +115,6 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
             "conversation_id": conversation_id,
             "record_content": record_content,
             "force_goto_path": payload.options.force_goto_path,
-            "traceparent": traceparent,
-            "tracestate": tracestate,
             "agent_name": "langgraph-workflow-agent",
             "otel_agent_span": True,
             "thread_id": request_id,
