@@ -115,14 +115,6 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
             "otel_agent_span": True,
             "thread_id": request_id,
         }
-        # Pass traceparent/tracestate so the AzureAIOpenTelemetryTracer can
-        # parent agent spans under the incoming trace context (e.g. from APIM).
-        traceparent = headers.get("traceparent", "")
-        if traceparent:
-            metadata["traceparent"] = traceparent
-            tracestate = headers.get("tracestate", "")
-            if tracestate:
-                metadata["tracestate"] = tracestate
         # Inject custom headers as gen_ai.custom.* attributes
         for attr_name, value in custom_metadata.items():
             metadata[attr_name] = value
@@ -165,6 +157,7 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
         final_message = result.get("final_answer", "No response generated.")
 
         # Extract trace_id from W3C traceparent header
+        traceparent = headers.get("traceparent", "")
         trace_id = None
         if traceparent:
             parts = traceparent.split("-")
