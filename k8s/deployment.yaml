@@ -4,7 +4,7 @@ metadata:
   name: zava-travel-agent
   namespace: agent-tracing-demo
 spec:
-  replicas: 2
+  replicas: 1
   revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate
@@ -21,9 +21,11 @@ spec:
         azure.workload.identity/use: "true"
     spec:
       serviceAccountName: zava-travel-agent-sa
+      imagePullSecrets:
+        - name: acr-secret
       containers:
         - name: zava-travel-agent
-          image: <your-acr-name>.azurecr.io/zava-travel-agent:<tag>
+          image: 7a88072nitya3pagents81b7acr.azurecr.io/zava-travel-agent:v2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

@@ -2,18 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable
 from typing import Any, TypedDict
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 from opentelemetry import trace
 
 from app.retriever import OfflineRetriever
-from app.tools import execute_tool
-
-TRACER = trace.get_tracer(__name__)
+from app.tools import TOOL_LIST, TOOLS_BY_NAME
 
 
 class WorkflowState(TypedDict, total=False):
@@ -109,41 +107,60 @@ def _fallback_plan(state: WorkflowState, *, budget_mode: bool) -> dict[str, Any]
 
 def _invoke_chat(
     llm: Any,
-    node_name: str,
     system_prompt: str,
     payload: dict[str, Any],
-    callbacks_factory: Callable[[bool], list[Any]],
-    record_content: bool,
-    metadata: dict[str, Any],
+    config: RunnableConfig,
 ) -> str:
-    callbacks = callbacks_factory(record_content)
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=json.dumps(payload, ensure_ascii=True)),
     ]
-    with TRACER.start_as_current_span("gen_ai.chat") as span:
-        span.set_attribute("gen_ai.operation.name", "chat")
-        span.set_attribute("gen_ai.provider.name", "azure_openai")
-        span.set_attribute("app.node_name", node_name)
-        request_id = metadata.get("request_id")
-        if request_id:
-            span.set_attribute("biz.request_id", request_id)
-        if record_content:
-            span.set_attribute("gen_ai.request.payload", json.dumps(payload, sort_keys=True))
-        invoke_kwargs = {"config": {"callbacks": callbacks}} if callbacks else {}
-        response = llm.invoke(messages, **invoke_kwargs)
-        text = _as_text(response)
-        if record_content:
-            span.set_attribute("gen_ai.response.payload", text)
-        return text
+    response = llm.invoke(messages, config=config)
+    return _as_text(response)
+
+
+def _invoke_with_tools(
+    llm_with_tools: Any,
+    system_prompt: str,
+    user_content: str,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Call the LLM with bound tools. Execute any tool_calls the model makes
+    and feed results back, collecting all tool outputs."""
+    messages: list[Any] = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_content),
+    ]
+    collected: dict[str, Any] = {}
+
+    for _ in range(5):  # max iterations to prevent infinite loops
+        response: AIMessage = llm_with_tools.invoke(messages, config=config)
+        messages.append(response)
+
+        if not response.tool_calls:
+            break
+
+        for tc in response.tool_calls:
+            tool_fn = TOOLS_BY_NAME.get(tc["name"])
+            if tool_fn is None:
+                result = {"error": f"Unknown tool: {tc['name']}"}
+            else:
+                result = tool_fn.invoke(tc["args"])
+            collected[tc["name"]] = result
+            messages.append(
+                ToolMessage(content=json.dumps(result, default=str), tool_call_id=tc["id"])
+            )
+
+    return collected
 
 
 def build_graph(
     *,
     llm: Any,
     retriever: OfflineRetriever,
-    callbacks_factory: Callable[[bool], list[Any]],
 ) -> Any:
+    llm_with_tools = llm.bind_tools(TOOL_LIST)
+
     builder = StateGraph(WorkflowState)
 
     def user_proxy(state: WorkflowState) -> WorkflowState:
@@ -171,10 +188,8 @@ def build_graph(
         docs = retriever.search(query)
         return {"context_docs": docs}
 
-    def draft_plan(state: WorkflowState) -> WorkflowState:
+    def draft_plan(state: WorkflowState, config: RunnableConfig) -> WorkflowState:
         _annotate_span(state, "draft_plan")
-        metadata = state.get("metadata", {})
-        record_content = bool(metadata.get("record_content", False))
         payload = {
             "constraints": state.get("constraints", {}),
             "context_docs": state.get("context_docs", []),
@@ -188,65 +203,41 @@ def build_graph(
         }
         response_text = _invoke_chat(
             llm,
-            "draft_plan",
             "NODE:draft_plan. You are Zava Travel Agent. Build an initial travel plan using destination info and retrieved context.",
             payload,
-            callbacks_factory,
-            record_content,
-            metadata,
+            config,
         )
         parsed = _extract_json(response_text)
         plan = parsed if parsed.get("itinerary") else _fallback_plan(state, budget_mode=False)
         return {"draft_plan": plan}
 
-    def run_tools(state: WorkflowState) -> WorkflowState:
+    def run_tools(state: WorkflowState, config: RunnableConfig) -> WorkflowState:
+        """Use LLM tool-calling: the model receives tool definitions, decides
+        which tools to call, and the results are fed back automatically."""
         _annotate_span(state, "run_tools")
         constraints = state.get("constraints", {})
-        metadata = state.get("metadata", {})
-        record_content = bool(metadata.get("record_content", False))
-        destination = constraints.get("destination", "Paris")
-        travelers = int(constraints.get("travelers", 2))
-        days = int(constraints.get("days", 5))
-        travel_style = constraints.get("travel_style", "mid")
+        plan = state.get("draft_plan", {})
+        prompt = (
+            "You are Zava, a travel planning assistant with access to tools. "
+            "You MUST call all four tools: search_flights, search_hotels, "
+            "get_destination_weather, and estimate_trip_cost."
+        )
+        user_msg = json.dumps({
+            "destination": constraints.get("destination", "Paris"),
+            "travelers": int(constraints.get("travelers", 2)),
+            "days": int(constraints.get("days", 5)),
+            "travel_style": constraints.get("travel_style", "mid"),
+            "dates": constraints.get("dates", []),
+            "budget_usd": float(constraints.get("budget_usd", 2000)),
+            "plan": plan,
+        })
 
-        flights = execute_tool(
-            "search_flights",
-            {
-                "destination": destination,
-                "travelers": travelers,
-                "travel_class": "budget" if travel_style == "budget" else "economy",
-            },
-            record_content=record_content,
-        )
-        hotels = execute_tool(
-            "search_hotels",
-            {
-                "destination": destination,
-                "nights": days,
-                "travelers": travelers,
-                "tier": travel_style,
-            },
-            record_content=record_content,
-        )
-        weather = execute_tool(
-            "get_destination_weather",
-            {
-                "destination": destination,
-                "dates": constraints.get("dates", []),
-            },
-            record_content=record_content,
-        )
-        cost = execute_tool(
-            "estimate_trip_cost",
-            {
-                "plan": state.get("draft_plan", {}),
-                "days": days,
-                "budget_usd": float(constraints.get("budget_usd", 2000)),
-                "travelers": travelers,
-                "destination": destination,
-            },
-            record_content=record_content,
-        )
+        collected = _invoke_with_tools(llm_with_tools, prompt, user_msg, config)
+
+        flights = collected.get("search_flights", {})
+        hotels = collected.get("search_hotels", {})
+        weather = collected.get("get_destination_weather", {"summary": "No weather data."})
+        cost = collected.get("estimate_trip_cost", {"estimate_usd": 0, "within_budget": True})
         return {"tool_outputs": {"flights": flights, "hotels": hotels, "weather": weather, "cost": cost}}
 
     def evaluate_constraints(state: WorkflowState) -> WorkflowState | Command:
@@ -283,10 +274,8 @@ def build_graph(
             "metadata": metadata,
         }
 
-    def replan(state: WorkflowState) -> WorkflowState:
+    def replan(state: WorkflowState, config: RunnableConfig) -> WorkflowState:
         _annotate_span(state, "replan", route_decision="run_tools")
-        metadata = state.get("metadata", {})
-        record_content = bool(metadata.get("record_content", False))
         payload = {
             "constraints": state.get("constraints", {}),
             "previous_plan": state.get("draft_plan", {}),
@@ -300,21 +289,16 @@ def build_graph(
         }
         response_text = _invoke_chat(
             llm,
-            "replan",
             "NODE:replan. You are Zava Travel Agent. Rewrite the travel plan to fit the budget.",
             payload,
-            callbacks_factory,
-            record_content,
-            metadata,
+            config,
         )
         parsed = _extract_json(response_text)
         plan = parsed if parsed.get("itinerary") else _fallback_plan(state, budget_mode=True)
         return {"draft_plan": plan}
 
-    def finalize(state: WorkflowState) -> WorkflowState:
+    def finalize(state: WorkflowState, config: RunnableConfig) -> WorkflowState:
         _annotate_span(state, "finalize")
-        metadata = state.get("metadata", {})
-        record_content = bool(metadata.get("record_content", False))
         payload = {
             "plan": state.get("draft_plan", {}),
             "tool_outputs": state.get("tool_outputs", {}),
@@ -327,12 +311,9 @@ def build_graph(
         }
         response_text = _invoke_chat(
             llm,
-            "finalize",
             "NODE:finalize. You are Zava Travel Agent. Return the final user-facing travel plan.",
             payload,
-            callbacks_factory,
-            record_content,
-            metadata,
+            config,
         )
         return {"final_answer": response_text.strip()}
 

@@ -3,10 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from langchain_core.tools import StructuredTool
-from opentelemetry import trace
-
-TRACER = trace.get_tracer(__name__)
+from langchain_core.tools import tool
 
 # --- Deterministic weather data for popular destinations ---
 WEATHER_TABLE: dict[str, dict[str, dict[str, Any]]] = {
@@ -215,9 +212,11 @@ ACTIVITY_BASE_COST: dict[str, float] = {
 }
 
 
+@tool
 def search_flights(
     destination: str, travelers: int, travel_class: str,
 ) -> dict[str, Any]:
+    """Deterministic flight search for destination and travel class."""
     norm = destination.strip().lower()
     dest_flights = FLIGHT_TABLE.get(norm, FLIGHT_TABLE.get("new york", {}))
     tier = travel_class.strip().lower()
@@ -237,9 +236,11 @@ def search_flights(
     }
 
 
+@tool
 def search_hotels(
     destination: str, nights: int, travelers: int, tier: str,
 ) -> dict[str, Any]:
+    """Deterministic hotel search by destination and tier."""
     norm = destination.strip().lower()
     dest_hotels = HOTEL_TABLE.get(norm, HOTEL_TABLE.get("new york", {}))
     hotel_tier = tier.strip().lower()
@@ -261,9 +262,11 @@ def search_hotels(
     }
 
 
+@tool
 def get_destination_weather(
     destination: str, dates: list[str],
 ) -> dict[str, Any]:
+    """Deterministic weather forecast for travel destination."""
     norm = destination.strip().lower()
     table = WEATHER_TABLE.get(norm, {})
     daily = []
@@ -282,11 +285,17 @@ def get_destination_weather(
     }
 
 
+@tool
 def estimate_trip_cost(
-    plan: dict[str, Any], days: int, budget_usd: float,
+    plan: str, days: int, budget_usd: float,
     travelers: int, destination: str,
 ) -> dict[str, Any]:
-    itinerary = plan.get("itinerary", [])
+    """Deterministic total trip cost estimator including flights, hotels, and activities. Pass plan as a JSON string."""
+    try:
+        plan_dict = json.loads(plan) if isinstance(plan, str) else plan
+    except (json.JSONDecodeError, TypeError):
+        plan_dict = {}
+    itinerary = plan_dict.get("itinerary", [])
     line_items: list[dict[str, Any]] = []
     total = 0.0
 
@@ -325,48 +334,5 @@ def estimate_trip_cost(
     }
 
 
-SEARCH_FLIGHTS_TOOL = StructuredTool.from_function(
-    func=search_flights,
-    name="search_flights",
-    description="Deterministic flight search for destination and travel class.",
-)
-SEARCH_HOTELS_TOOL = StructuredTool.from_function(
-    func=search_hotels,
-    name="search_hotels",
-    description="Deterministic hotel search by destination and tier.",
-)
-GET_WEATHER_TOOL = StructuredTool.from_function(
-    func=get_destination_weather,
-    name="get_destination_weather",
-    description="Deterministic weather forecast for travel destination.",
-)
-ESTIMATE_COST_TOOL = StructuredTool.from_function(
-    func=estimate_trip_cost,
-    name="estimate_trip_cost",
-    description="Deterministic total trip cost estimator including flights, hotels, and activities.",
-)
-
-TOOLS = {
-    SEARCH_FLIGHTS_TOOL.name: SEARCH_FLIGHTS_TOOL,
-    SEARCH_HOTELS_TOOL.name: SEARCH_HOTELS_TOOL,
-    GET_WEATHER_TOOL.name: GET_WEATHER_TOOL,
-    ESTIMATE_COST_TOOL.name: ESTIMATE_COST_TOOL,
-}
-
-
-def execute_tool(
-    tool_name: str,
-    args: dict[str, Any],
-    *,
-    record_content: bool = False,
-) -> dict[str, Any]:
-    tool = TOOLS[tool_name]
-    with TRACER.start_as_current_span(f"tool.{tool_name}") as span:
-        span.set_attribute("gen_ai.operation.name", "execute_tool")
-        span.set_attribute("gen_ai.tool.name", tool_name)
-        if record_content:
-            span.set_attribute("gen_ai.tool.call.arguments", json.dumps(args, sort_keys=True))
-        result = tool.invoke(args)
-        if record_content:
-            span.set_attribute("gen_ai.tool.result", json.dumps(result, sort_keys=True))
-        return result
+TOOL_LIST = [search_flights, search_hotels, get_destination_weather, estimate_trip_cost]
+TOOLS_BY_NAME = {t.name: t for t in TOOL_LIST}

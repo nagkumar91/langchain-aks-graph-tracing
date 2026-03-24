@@ -7,7 +7,17 @@ from app.server import create_app
 
 
 class StubLLM:
-    def invoke(self, messages, config=None):  # noqa: ANN001
+    """Stub that supports bind_tools() and returns appropriate responses."""
+
+    def __init__(self):
+        self._tools = None
+
+    def bind_tools(self, tools):
+        bound = StubLLM()
+        bound._tools = tools
+        return bound
+
+    def invoke(self, messages, config=None, **kwargs):  # noqa: ANN001
         system = messages[0].content
         if "NODE:draft_plan" in system:
             return AIMessage(
@@ -67,6 +77,46 @@ class StubLLM:
                     }
                 )
             )
+        # For run_tools node: if tools are bound, simulate tool_calls then
+        # return a final message after tool results are fed back.
+        if self._tools and "MUST call" in system:
+            has_tool_results = any(
+                getattr(m, "type", None) == "tool"
+                for m in messages
+            )
+            if not has_tool_results:
+                return AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_flights_1",
+                            "name": "search_flights",
+                            "args": {"destination": "Paris", "travelers": 2, "travel_class": "economy"},
+                        },
+                        {
+                            "id": "call_hotels_1",
+                            "name": "search_hotels",
+                            "args": {"destination": "Paris", "nights": 3, "travelers": 2, "tier": "mid"},
+                        },
+                        {
+                            "id": "call_weather_1",
+                            "name": "get_destination_weather",
+                            "args": {"destination": "Paris", "dates": ["2026-06-10", "2026-06-11", "2026-06-12"]},
+                        },
+                        {
+                            "id": "call_cost_1",
+                            "name": "estimate_trip_cost",
+                            "args": {
+                                "plan": "{}",
+                                "days": 3,
+                                "budget_usd": 800.0,
+                                "travelers": 2,
+                                "destination": "Paris",
+                            },
+                        },
+                    ],
+                )
+            return AIMessage(content="Tools executed successfully.")
         return AIMessage(content="Here is your Zava travel plan for Paris! Bon voyage!")
 
 
