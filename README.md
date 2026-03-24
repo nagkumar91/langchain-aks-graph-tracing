@@ -151,13 +151,69 @@ az rest --method put \
 
 ### Invoke via AI Gateway
 
-Once registered, all traffic goes through the APIM gateway:
+Once registered, all traffic goes through the APIM gateway with unified tracing:
 
 ```bash
-curl -X POST https://<APIM_NAME>.azure-api.net/<AGENT_ID>/invoke \
+curl -X POST https://<APIM_NAME>.azure-api.net/zava-travel-agent/invoke \
   -H "Content-Type: application/json" \
+  -H "traceparent: 00-$(openssl rand -hex 16)-$(openssl rand -hex 8)-01" \
   -H "metadata-trip-type: romantic" \
-  -d '{"input":{"messages":[{"role":"user","content":"Plan a Paris trip"}]},...}'
+  -H "metadata-client-region: eu-west-1" \
+  -H "metadata-source: ai-foundry-gateway" \
+  -d '{
+    "input": {
+      "messages": [{"role": "user", "content": "Plan a 4-day romantic Paris getaway for 2. Eiffel Tower, Seine cruise, fine dining."}]
+    },
+    "constraints": {
+      "budget_usd": 4000,
+      "days": 4,
+      "destination": "Paris",
+      "travelers": 2,
+      "travel_style": "luxury",
+      "dates": ["2026-06-10", "2026-06-11", "2026-06-12", "2026-06-13"]
+    },
+    "options": {"record_content": true, "force_goto_path": false}
+  }'
+```
+
+The `traceparent` header creates a unified trace across APIM → Agent. All 30+ spans (gateway HTTP + agent workflow + LLM calls + tool executions) appear under a single trace ID in App Insights.
+
+**More examples:**
+
+```bash
+# Tokyo budget solo adventure (force replan)
+curl -X POST https://<APIM_NAME>.azure-api.net/zava-travel-agent/invoke \
+  -H "Content-Type: application/json" \
+  -H "traceparent: 00-$(openssl rand -hex 16)-$(openssl rand -hex 8)-01" \
+  -H "metadata-trip-type: adventure" \
+  -d '{
+    "input": {"messages": [{"role": "user", "content": "Plan a 5-day solo Tokyo adventure. Temples, street food, Akihabara."}]},
+    "constraints": {"budget_usd": 1500, "days": 5, "destination": "Tokyo", "travelers": 1, "travel_style": "budget", "dates": ["2026-04-05", "2026-04-06", "2026-04-07", "2026-04-08", "2026-04-09"]},
+    "options": {"record_content": true, "force_goto_path": true}
+  }'
+
+# London family weekend
+curl -X POST https://<APIM_NAME>.azure-api.net/zava-travel-agent/invoke \
+  -H "Content-Type: application/json" \
+  -H "traceparent: 00-$(openssl rand -hex 16)-$(openssl rand -hex 8)-01" \
+  -H "metadata-trip-type: family" \
+  -d '{
+    "input": {"messages": [{"role": "user", "content": "Plan a 2-day London weekend for a family of 4. British Museum, Tower of London, afternoon tea."}]},
+    "constraints": {"budget_usd": 1800, "days": 2, "destination": "London", "travelers": 4, "travel_style": "mid", "dates": ["2026-06-15", "2026-06-16"]},
+    "options": {"record_content": true, "force_goto_path": false}
+  }'
+
+# Dubai luxury escape
+curl -X POST https://<APIM_NAME>.azure-api.net/zava-travel-agent/invoke \
+  -H "Content-Type: application/json" \
+  -H "traceparent: 00-$(openssl rand -hex 16)-$(openssl rand -hex 8)-01" \
+  -H "metadata-trip-type: luxury" \
+  -d '{
+    "input": {"messages": [{"role": "user", "content": "Plan a 3-day Dubai luxury trip. Burj Khalifa, desert safari, shopping."}]},
+    "constraints": {"budget_usd": 5000, "days": 3, "destination": "Dubai", "travelers": 2, "travel_style": "luxury", "dates": ["2026-11-10", "2026-11-11", "2026-11-12"]},
+    "options": {"record_content": true, "force_goto_path": false}
+  }'
+```
 ```
 
 ## Trace Semantics
