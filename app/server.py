@@ -112,6 +112,7 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
             "record_content": record_content,
             "force_goto_path": payload.options.force_goto_path,
             "agent_name": "zava-travel-agent",
+            "agent_id": "zava-travel-agent",
             "otel_agent_span": True,
             "thread_id": request_id,
         }
