@@ -22,6 +22,7 @@ class WorkflowState(TypedDict, total=False):
     tool_outputs: dict[str, Any]
     route: str
     final_answer: str
+    messages: list[dict[str, str]]
     metadata: dict[str, Any]
 
 
@@ -315,7 +316,10 @@ def build_graph(
             payload,
             config,
         )
-        return {"final_answer": response_text.strip()}
+        return {
+            "final_answer": response_text.strip(),
+            "messages": [{"role": "assistant", "content": response_text.strip()}],
+        }
 
     builder.add_node("user_proxy", user_proxy)
     builder.add_node("orchestrator", orchestrator)
