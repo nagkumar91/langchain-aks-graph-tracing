@@ -119,6 +119,7 @@ def create_langchain_callbacks(record_content: bool) -> list[Any]:
         provider_name="azure_openai",
         name=os.getenv("OTEL_SERVICE_NAME", "zava-travel-agent"),
         trace_all_langgraph_nodes=True,
+        message_keys=("messages", "final_answer", "draft_plan"),
     )
     return [tracer]
 
