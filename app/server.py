@@ -123,6 +123,7 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
 
         initial_state = {
             "thread": {"messages": [message.model_dump() for message in payload.input.messages]},
+            "messages": [message.model_dump() for message in payload.input.messages],
             "constraints": payload.constraints.model_dump(),
             "metadata": metadata,
         }
