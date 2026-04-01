@@ -16,6 +16,7 @@ class TelemetryConfig:
     sampler_arg: str
     exporter_enabled: bool
     callback_enabled: bool
+    auto_instrumented: bool
     default_record_content: bool
 
 
@@ -50,6 +51,13 @@ def _resource_attributes() -> dict[str, str]:
 
 
 def initialize_tracing() -> TelemetryConfig:
+    """Set up Azure Monitor export and enable auto-instrumentation.
+
+    When ``enable_auto_tracing()`` is available (PR #381), the tracer is
+    auto-injected into every ``BaseCallbackManager`` — no manual callbacks
+    needed.  Falls back to manual callback creation if auto-instrumentation
+    is unavailable.
+    """
     global _INITIALIZED, _CONFIG
     if _INITIALIZED and _CONFIG is not None:
         return _CONFIG
@@ -68,6 +76,8 @@ def initialize_tracing() -> TelemetryConfig:
     connection_string = os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
     exporter_enabled = bool(connection_string)
 
+    # configure_azure_monitor MUST be called before enable_auto_tracing so
+    # the TracerProvider / exporter pipeline is already wired up.
     if connection_string:
         from azure.monitor.opentelemetry import configure_azure_monitor
 
@@ -81,13 +91,37 @@ def initialize_tracing() -> TelemetryConfig:
             "APPLICATION_INSIGHTS_CONNECTION_STRING is not set; telemetry exporter is disabled."
         )
 
+    # Try auto-instrumentation first (PR #381 / future release).
+    auto_instrumented = False
+    callback_enabled = False
     try:
-        from langchain_azure_ai.callbacks.tracers.inference_tracing import (  # noqa: F401
-            AzureAIOpenTelemetryTracer,
+        from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
+
+        enable_auto_tracing(
+            connection_string=connection_string,
+            enable_content_recording=_parse_bool(
+                os.getenv("OTEL_RECORD_CONTENT"), default=True
+            ),
+            provider_name="azure_openai",
+            agent_id="zava-travel-agent",
+            trace_all_langgraph_nodes=True,
+            message_keys=["messages"],
+            auto_configure_azure_monitor=False,  # already configured above
         )
+        auto_instrumented = True
         callback_enabled = True
+        LOGGER.info("enable_auto_tracing() active — callbacks injected automatically.")
     except ImportError:
-        callback_enabled = False
+        LOGGER.info(
+            "enable_auto_tracing() not available; falling back to manual callbacks."
+        )
+        try:
+            from langchain_azure_ai.callbacks.tracers.inference_tracing import (  # noqa: F401
+                AzureAIOpenTelemetryTracer,
+            )
+            callback_enabled = True
+        except ImportError:
+            pass
 
     _CONFIG = TelemetryConfig(
         service_name=service_name,
@@ -96,6 +130,7 @@ def initialize_tracing() -> TelemetryConfig:
         sampler_arg=sampler_arg,
         exporter_enabled=exporter_enabled,
         callback_enabled=callback_enabled,
+        auto_instrumented=auto_instrumented,
         default_record_content=_parse_bool(os.getenv("OTEL_RECORD_CONTENT"), default=True),
     )
     _INITIALIZED = True
@@ -103,6 +138,11 @@ def initialize_tracing() -> TelemetryConfig:
 
 
 def create_langchain_callbacks(record_content: bool) -> list[Any]:
+    """Return manual callbacks only when auto-instrumentation is not active."""
+    config = initialize_tracing()
+    if config.auto_instrumented:
+        return []
+
     try:
         from langchain_azure_ai.callbacks.tracers.inference_tracing import (
             AzureAIOpenTelemetryTracer,
@@ -132,5 +172,6 @@ def effective_telemetry_config() -> dict[str, Any]:
         "sampler_arg": config.sampler_arg,
         "exporter_enabled": config.exporter_enabled,
         "callback_enabled": config.callback_enabled,
+        "auto_instrumented": config.auto_instrumented,
         "default_record_content": config.default_record_content,
     }
