@@ -23,21 +23,28 @@ class StubLLM:
             return AIMessage(
                 content=json.dumps(
                     {
+                        "destination": "Paris",
                         "itinerary": [
                             {
                                 "day": 1,
-                                "activity": "Waterfront Walk",
-                                "type": "outdoor",
+                                "activity": "Eiffel Tower & Seine Cruise",
+                                "type": "sightseeing",
                                 "budget_friendly": False,
                             },
                             {
                                 "day": 2,
-                                "activity": "Museum Day",
-                                "type": "indoor",
+                                "activity": "Louvre Museum & Montmartre",
+                                "type": "cultural",
+                                "budget_friendly": False,
+                            },
+                            {
+                                "day": 3,
+                                "activity": "Versailles Day Trip",
+                                "type": "sightseeing",
                                 "budget_friendly": False,
                             },
                         ],
-                        "summary": "Initial draft plan",
+                        "summary": "A 3-day Parisian adventure by Zava",
                     }
                 )
             )
@@ -45,32 +52,36 @@ class StubLLM:
             return AIMessage(
                 content=json.dumps(
                     {
+                        "destination": "Paris",
                         "itinerary": [
                             {
                                 "day": 1,
-                                "activity": "Discovery Park",
+                                "activity": "Free Walking Tour & Picnic",
                                 "type": "budget",
                                 "budget_friendly": True,
                             },
                             {
                                 "day": 2,
-                                "activity": "Food Hall + Museum Pass",
+                                "activity": "Musée d'Orsay Free Day & Parks",
+                                "type": "budget",
+                                "budget_friendly": True,
+                            },
+                            {
+                                "day": 3,
+                                "activity": "Marché aux Puces & Street Food",
                                 "type": "budget",
                                 "budget_friendly": True,
                             },
                         ],
-                        "summary": "Budget-friendly replan",
+                        "summary": "Budget-friendly Paris replan by Zava",
                     }
                 )
             )
         # For run_tools node: if tools are bound, simulate tool_calls then
         # return a final message after tool results are fed back.
-        if self._tools and "MUST call both tools" in system:
-            # Check if we already have ToolMessage in the conversation
+        if self._tools and "MUST call" in system:
             has_tool_results = any(
-                getattr(m, "type", None) == "tool" or
-                (hasattr(m, "content") and isinstance(m, type) is False and
-                 getattr(type(m), "__name__", "") == "ToolMessage")
+                getattr(m, "type", None) == "tool"
                 for m in messages
             )
             if not has_tool_results:
@@ -78,33 +89,51 @@ class StubLLM:
                     content="",
                     tool_calls=[
                         {
+                            "id": "call_flights_1",
+                            "name": "search_flights",
+                            "args": {"destination": "Paris", "travelers": 2, "travel_class": "economy"},
+                        },
+                        {
+                            "id": "call_hotels_1",
+                            "name": "search_hotels",
+                            "args": {"destination": "Paris", "nights": 3, "travelers": 2, "tier": "mid"},
+                        },
+                        {
                             "id": "call_weather_1",
-                            "name": "get_weather",
-                            "args": {"location": "Seattle", "dates": ["2026-05-20", "2026-05-21"]},
+                            "name": "get_destination_weather",
+                            "args": {"destination": "Paris", "dates": ["2026-06-10", "2026-06-11", "2026-06-12"]},
                         },
                         {
                             "id": "call_cost_1",
-                            "name": "estimate_cost",
-                            "args": {"plan_json": "{}", "days": 2, "budget_usd": 120.0},
+                            "name": "estimate_trip_cost",
+                            "args": {
+                                "plan": "{}",
+                                "days": 3,
+                                "budget_usd": 800.0,
+                                "travelers": 2,
+                                "destination": "Paris",
+                            },
                         },
                     ],
                 )
             return AIMessage(content="Tools executed successfully.")
-        return AIMessage(content="Here is your finalized itinerary and rationale.")
+        return AIMessage(content="Here is your Zava travel plan for Paris! Bon voyage!")
 
 
 def _payload(force_goto: bool = False) -> dict:
     return {
         "input": {
             "messages": [
-                {"role": "user", "content": "Plan a 2-day Seattle itinerary with rain backup."}
+                {"role": "user", "content": "Plan a 3-day trip to Paris for 2 travelers."}
             ]
         },
         "constraints": {
-            "budget_usd": 120.0,
-            "days": 2,
-            "location": "Seattle",
-            "dates": ["2026-05-20", "2026-05-21"],
+            "budget_usd": 800.0,
+            "days": 3,
+            "destination": "Paris",
+            "travelers": 2,
+            "travel_style": "mid",
+            "dates": ["2026-06-10", "2026-06-11", "2026-06-12"],
         },
         "options": {"record_content": False, "force_goto_path": force_goto},
     }
@@ -132,3 +161,14 @@ def test_invoke_honors_traceparent() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["telemetry"]["trace_id"] == incoming_trace_id
+
+
+def test_invoke_returns_flight_and_hotel_debug() -> None:
+    client = TestClient(create_app(llm=StubLLM()))
+    response = client.post("/invoke", json=_payload(force_goto=False))
+    assert response.status_code == 200
+    body = response.json()
+    debug = body["output"]["debug"]
+    assert "Air France" in debug["flight_summary"]
+    assert "Hotel Le Marais" in debug["hotel_summary"]
+    assert debug["cost_estimate_usd"] > 0

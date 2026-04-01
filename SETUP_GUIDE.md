@@ -1,166 +1,246 @@
-# Setup Guide: Local + AKS + App Insights Validation
+# Setup Guide: Local → AKS → AI Foundry Registration
 
 ## 1) Prerequisites
 
-- Python 3.11+ (`python3`)
-- Azure CLI (`az`) authenticated
-- `kubectl` (for AKS deployment)
-- Azure OpenAI resource with GPT-4.1 deployment
-- App Insights resource
+- Python 3.11+, Azure CLI (`az`), `kubectl`, Docker
+- Azure subscription with:
+  - Azure OpenAI resource (or APIM gateway to one) with GPT-4.1 deployment
+  - App Insights resource
+  - ACR (Azure Container Registry)
+  - AI Foundry project with **AI Gateway enabled**
 
 ## 2) Local Environment Setup
 
 ```bash
 cp .env.example .env
-# Fill in: AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_CHAT_DEPLOYMENT,
-#          AZURE_OPENAI_API_KEY, APPLICATION_INSIGHTS_CONNECTION_STRING
+# Fill in AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_CHAT_DEPLOYMENT,
+#         AZURE_OPENAI_API_KEY, APPLICATION_INSIGHTS_CONNECTION_STRING
 
 python3 -m venv .venv
 source .venv/bin/activate
 set -a && source .env && set +a
 python3 -m pip install -e .[dev]
-```
-
-### Dependency: langchain-azure-ai
-
-Installed from `langchain-ai/langchain-azure` main branch:
-
-```bash
-pip install "langchain-azure-ai[opentelemetry] @ git+https://github.com/langchain-ai/langchain-azure.git@main#subdirectory=libs/azure-ai"
-```
-
-## 3) Local Validation
-
-```bash
-source .venv/bin/activate
-set -a && source .env && set +a
-python3 -m compileall app
 python3 -m pytest
 ```
 
-## 4) Run the Server
+## 3) Run Locally
 
 ```bash
-# Use always_on sampler for demos (100% sampling):
-export OTEL_TRACES_SAMPLER=always_on
+export OTEL_TRACES_SAMPLER=always_on  # 100% sampling for demos
 uvicorn app.server:app --host 0.0.0.0 --port 8080
 ```
 
-## 5) Invoke with Trace Headers
-
+Test:
 ```bash
 curl -X POST http://localhost:8080/invoke \
   -H "Content-Type: application/json" \
-  -H "traceparent: 00-aaaabbbbccccddddeeee111122223333-ff00ff00ff00ff00-01" \
-  -H "metadata-client-region: us-west-2" \
-  -H "metadata-session-id: sess-abc-123" \
-  -H "metadata-experiment-id: exp-42" \
-  -d '{
-    "input": {"messages":[{"role":"user","content":"Plan a 2-day Seattle itinerary under $100 with rain backup."}]},
-    "constraints":{"budget_usd":100,"days":2,"location":"Seattle","dates":["2026-05-20","2026-05-21"]},
-    "options":{"record_content":true,"force_goto_path":true}
-  }'
+  -H "metadata-trip-type: romantic" \
+  -d '{"input":{"messages":[{"role":"user","content":"Plan a 3-day Paris trip for 2"}]},"constraints":{"budget_usd":3000,"days":3,"destination":"Paris","travelers":2,"travel_style":"mid","dates":["2026-06-10","2026-06-11","2026-06-12"]},"options":{"record_content":true,"force_goto_path":false}}'
 ```
 
-Expected:
-- HTTP 200
-- `output.debug.route_taken = replan_then_finalize` (goto path)
-- `telemetry.trace_id` matches the traceparent header
-- Custom `metadata-*` headers flow as `gen_ai.custom.*` span attributes
+## 4) Build and Deploy to AKS
 
-## 6) Telemetry Architecture
-
-```
-configure_azure_monitor()
-  └─ TracerProvider + BatchSpanProcessor → App Insights
-  └─ FastAPI auto-instrumentation (HTTP server spans)
-  └─ LiveMetrics / QuickPulse
-
-AzureAIOpenTelemetryTracer (LangChain callback)
-  └─ invoke_agent spans (per LangGraph node)
-  └─ chat spans (with gen_ai.tool.definitions from bind_tools)
-  └─ execute_tool spans (tool call arguments + results)
-```
-
-Key: `configure_azure_monitor()` runs first and sets up the global `TracerProvider`.
-The `AzureAIOpenTelemetryTracer` detects the existing provider and piggybacks on it
-(no duplicate provider — see PR langchain-ai/langchain-azure#398).
-
-## 7) Query Traces in App Insights
-
-### Via Azure Portal
-Go to App Insights → Logs, run:
-
-```kql
-union dependencies, requests
-| where timestamp > ago(30m)
-| where customDimensions["gen_ai.operation.name"] == "invoke_agent"
-| project TimeGenerated, name, duration,
-          customDimensions["gen_ai.agent.name"],
-          customDimensions["gen_ai.tool.definitions"],
-          customDimensions["gen_ai.custom.metadata_client_region"]
-| order by TimeGenerated desc
-| take 20
-```
-
-### Via az CLI
+### Build the container image
 
 ```bash
+# Local build (for docker push)
+docker build --platform linux/amd64 -t <ACR>.azurecr.io/zava-travel-agent:v1 .
+az acr login -n <ACR>
+docker push <ACR>.azurecr.io/zava-travel-agent:v1
+
+# Or ACR build (requires git in image — see Dockerfile)
+az acr build -r <ACR> -t zava-travel-agent:v1 .
+```
+
+### Create AKS cluster (if needed)
+
+```bash
+az aks create -g <RG> -n <AKS_NAME> \
+  --location <REGION> --node-count 1 --node-vm-size Standard_B2s \
+  --enable-managed-identity --enable-oidc-issuer --enable-workload-identity
+```
+
+### Deploy
+
+```bash
+az aks get-credentials -g <RG> -n <AKS_NAME> --overwrite-existing
+kubectl create namespace agent-tracing-demo
+
+# ACR pull secret (if no role assignment)
+az acr credential show -n <ACR>
+kubectl -n agent-tracing-demo create secret docker-registry acr-secret \
+  --docker-server=<ACR>.azurecr.io \
+  --docker-username=<ACR_USER> --docker-password=<ACR_PASSWORD>
+
+# App secrets
+kubectl -n agent-tracing-demo create secret generic zava-travel-agent-secrets \
+  --from-literal=APPLICATION_INSIGHTS_CONNECTION_STRING="<CONN_STRING>" \
+  --from-literal=AZURE_OPENAI_API_KEY="<API_KEY>"
+
+# Update k8s/deployment.yaml with your image, then:
+kubectl apply -k k8s
+kubectl -n agent-tracing-demo rollout status deployment/zava-travel-agent
+```
+
+### Expose with HTTPS (required for Foundry registration)
+
+```bash
+# Generate self-signed cert
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /tmp/zava-tls.key -out /tmp/zava-tls.crt \
+  -subj "/CN=<EXTERNAL_IP>" -addext "subjectAltName=IP:<EXTERNAL_IP>"
+
+# Create configmap and update deployment to use TLS
+kubectl -n agent-tracing-demo create configmap zava-tls-files \
+  --from-file=tls.crt=/tmp/zava-tls.crt --from-file=tls.key=/tmp/zava-tls.key
+
+# Expose via LoadBalancer on port 443
+kubectl -n agent-tracing-demo apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: zava-travel-agent
+  namespace: agent-tracing-demo
+spec:
+  type: LoadBalancer
+  selector:
+    app: zava-travel-agent
+  ports:
+    - port: 443
+      targetPort: 8443
+EOF
+```
+
+Verify: `curl -sk https://<EXTERNAL_IP>/readyz`
+
+## 5) Register in Azure AI Foundry
+
+> Reference: [Register a custom agent](https://learn.microsoft.com/en-us/azure/foundry/control-plane/register-custom-agent)
+
+### Prerequisites
+1. **Enable AI Gateway** in Foundry Admin → AI Gateway tab → Enable for your project
+2. Note your APIM gateway name (e.g., `nitya-3p-agents-gateway`)
+
+### Register via CLI
+
+```bash
+SUB_ID="<subscription-id>"
+RG="<resource-group>"
+APIM="<apim-gateway-name>"
+AGENT_ID="zava-travel-agent"
+BACKEND_IP="<AKS_EXTERNAL_IP>"
+
+# Step 1: Register the agent API
+az rest --method put \
+  --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$APIM/apis/$AGENT_ID?api-version=2025-03-01-preview" \
+  --body "{
+    \"properties\": {
+      \"displayName\": \"Zava Travel Agent\",
+      \"path\": \"$AGENT_ID\",
+      \"protocols\": [\"https\"],
+      \"serviceUrl\": \"https://$BACKEND_IP\",
+      \"subscriptionRequired\": false,
+      \"isAgent\": true,
+      \"agent\": {
+        \"id\": \"$AGENT_ID\",
+        \"title\": \"Zava Travel Agent\",
+        \"description\": \"AI travel agent with LangGraph, tool-calling, and OTel tracing\",
+        \"providerName\": \"zava\"
+      }
+    }
+  }"
+
+# Step 2: Create backend (skip TLS validation for self-signed certs)
+az rest --method put \
+  --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$APIM/backends/$AGENT_ID-backend?api-version=2025-03-01-preview" \
+  --body "{
+    \"properties\": {
+      \"url\": \"https://$BACKEND_IP\",
+      \"protocol\": \"http\",
+      \"tls\": {\"validateCertificateChain\": false, \"validateCertificateName\": false}
+    }
+  }"
+
+# Step 3: Set policy (backend routing + 120s timeout for LLM calls)
+az rest --method put \
+  --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$APIM/apis/$AGENT_ID/policies/policy?api-version=2025-03-01-preview" \
+  --body "{
+    \"properties\": {
+      \"format\": \"xml\",
+      \"value\": \"<policies><inbound><base /><set-backend-service backend-id=\\\"$AGENT_ID-backend\\\" /></inbound><backend><forward-request timeout=\\\"120\\\" /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>\"
+    }
+  }"
+
+# Step 4: Add the /invoke operation
+az rest --method put \
+  --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$APIM/apis/$AGENT_ID/operations/invoke?api-version=2025-03-01-preview" \
+  --body '{"properties": {"displayName": "Invoke", "method": "POST", "urlTemplate": "/invoke"}}'
+```
+
+### Register via Portal
+
+1. Go to **Foundry** → your project → **Operate** → **Overview**
+2. Click **Register asset**
+3. Fill in:
+   - **Agent URL**: `https://<AKS_EXTERNAL_IP>/invoke`
+   - **Protocol**: General HTTP, Including REST
+   - **OpenTelemetry agent ID**: `zava-travel-agent`
+   - **Project**: your Foundry project
+   - **Agent name**: `Zava Travel Agent`
+
+### Send traffic via AI Gateway
+
+```bash
+curl -X POST https://<APIM>.azure-api.net/zava-travel-agent/invoke \
+  -H "Content-Type: application/json" \
+  -H "metadata-trip-type: luxury" \
+  -H "metadata-client-region: eu-west-1" \
+  -d '{"input":{"messages":[{"role":"user","content":"Plan a 4-day Paris getaway for 2"}]},"constraints":{"budget_usd":4000,"days":4,"destination":"Paris","travelers":2,"travel_style":"luxury","dates":["2026-06-10","2026-06-11","2026-06-12","2026-06-13"]},"options":{"record_content":true,"force_goto_path":false}}'
+```
+
+## 6) Verify Traces in App Insights
+
+```bash
+# Via az CLI (use the App Insights Application ID)
 az rest --method post \
   --url "https://api.applicationinsights.io/v1/apps/<APP_ID>/query" \
   --headers "Content-Type=application/json" \
-  --body '{"query": "union dependencies, requests | where operation_Id == '"'"'<TRACE_ID>'"'"' | project timestamp, itemType, name, duration, customDimensions | order by timestamp asc"}'
+  --body '{"query": "dependencies | where timestamp > ago(30m) | where customDimensions[\"gen_ai.agent.name\"] == \"zava-travel-agent\" | project timestamp, name, duration, customDimensions | order by timestamp desc | take 20"}'
 ```
 
-### Trace Shape (Observed)
+### Expected Trace Shape (~20-28 spans per request)
 
 ```
-invoke_agent langgraph-workflow-agent  (root, ~25s)
+invoke_agent zava-travel-agent              (root, ~25-50s)
 ├─ invoke_agent user_proxy
 ├─ invoke_agent orchestrator
 ├─ invoke_agent retrieve_context
 ├─ invoke_agent draft_plan
-│  └─ chat gpt-4.1-2025-04-14         (draft LLM call)
-├─ invoke_agent run_tools              📋 gen_ai.tool.definitions
-│  ├─ chat gpt-4.1-2025-04-14         (LLM decides tool calls)
-│  ├─ execute_tool get_weather
-│  ├─ execute_tool estimate_cost
-│  └─ chat gpt-4.1-2025-04-14         (LLM receives tool results)
-├─ invoke_agent evaluate_constraints   → goto replan
+│  └─ chat gpt-4.1-2025-04-14              (draft LLM call)
+├─ invoke_agent run_tools                   📋 gen_ai.tool.definitions
+│  ├─ chat gpt-4.1-2025-04-14              (LLM selects tools)
+│  ├─ execute_tool search_flights
+│  ├─ execute_tool search_hotels
+│  ├─ execute_tool get_destination_weather
+│  ├─ execute_tool estimate_trip_cost
+│  └─ chat gpt-4.1-2025-04-14              (LLM receives results)
+├─ invoke_agent evaluate_constraints        → goto replan (if over budget)
 ├─ invoke_agent replan
 │  └─ chat gpt-4.1-2025-04-14
-├─ invoke_agent run_tools              📋 gen_ai.tool.definitions (2nd pass)
-│  ├─ chat gpt-4.1-2025-04-14
-│  ├─ execute_tool get_weather
-│  ├─ execute_tool estimate_cost
-│  └─ chat gpt-4.1-2025-04-14
+├─ invoke_agent run_tools                   📋 (2nd pass)
+│  └─ ...
 ├─ invoke_agent evaluate_constraints
 └─ invoke_agent finalize
    └─ chat gpt-4.1-2025-04-14
 ```
 
-## 8) AKS Deployment
+## 7) Troubleshooting
 
-```bash
-# Build and push to ACR
-az acr build -r <acr-name> -t langgraph-workflow-agent:<tag> .
-az aks get-credentials -g <resource-group> -n <aks-name> --overwrite-existing
-
-# Apply secrets
-set -a && source .env && set +a
-kubectl -n agent-tracing-demo create secret generic workflow-agent-secrets \
-  --from-literal=APPLICATION_INSIGHTS_CONNECTION_STRING="$APPLICATION_INSIGHTS_CONNECTION_STRING" \
-  --from-literal=AZURE_OPENAI_API_KEY="${AZURE_OPENAI_API_KEY:-}" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# Deploy
-kubectl apply -k k8s
-kubectl -n agent-tracing-demo rollout status deployment/workflow-agent --timeout=600s
-```
-
-## 9) Notes
-
-- Set `OTEL_TRACES_SAMPLER=always_on` for demos; use `parentbased_trace_id_ratio` with `0.1` in prod.
-- `configure_azure_monitor()` auto-instruments FastAPI — no manual HTTP span creation needed.
-- Custom `metadata-*` headers are mapped to `gen_ai.custom.*` keys in LangChain metadata, which the tracer sets as span attributes.
-- The `langchain-azure-ai` tracer's `_configure_azure_monitor()` detects the existing provider and skips duplicate setup.
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| 502 on Foundry registration | AI Gateway not enabled on APIM | Enable in Foundry Admin → AI Gateway |
+| 502 on `isAgent: true` API creation | APIM doesn't support agent APIs | Enable AI Gateway first |
+| 500 on POST through APIM | APIM can't validate self-signed cert | Create backend with `validateCertificateChain: false` |
+| Timeout on invoke through APIM | Default 30s timeout too short for LLM | Set `forward-request timeout="120"` in policy |
+| No traces in App Insights | 10% sampling drops traces | Set `OTEL_TRACES_SAMPLER=always_on` |
+| Image pull fails on AKS | ACR role assignment missing | Use `imagePullSecrets` with ACR admin credentials |

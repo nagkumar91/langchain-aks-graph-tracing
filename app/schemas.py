@@ -15,9 +15,11 @@ class InvokeInput(BaseModel):
 
 
 class Constraints(BaseModel):
-    budget_usd: float = 500.0
-    days: int = 2
-    location: str = "Seattle"
+    budget_usd: float = 2000.0
+    days: int = 5
+    destination: str = "Paris"
+    travelers: int = 2
+    travel_style: str = "mid"
     dates: list[str] = Field(default_factory=list)
 
 
@@ -39,6 +41,8 @@ class OutputDebug(BaseModel):
     route_taken: str
     cost_estimate_usd: float
     weather_summary: str
+    flight_summary: str
+    hotel_summary: str
 
 
 class OutputPayload(BaseModel):

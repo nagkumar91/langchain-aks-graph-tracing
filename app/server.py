@@ -54,7 +54,7 @@ def _record_content(runtime: AgentRuntime, requested: bool | None) -> bool:
 
 def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None) -> FastAPI:
     runtime = AgentRuntime(llm=llm, retriever=retriever)
-    app = FastAPI(title="LangGraph Workflow Agent", version="0.1.0")
+    app = FastAPI(title="Zava Travel Agent", version="0.1.0")
     app.state.runtime = runtime
 
     @app.get("/healthz")
@@ -97,12 +97,8 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
         record_content = _record_content(runtime, payload.options.record_content)
 
         headers = {key.lower(): value for key, value in request.headers.items()}
-        traceparent = headers.get("traceparent", "")
-        tracestate = headers.get("tracestate", "")
 
         # Capture custom metadata-* headers for propagation to Azure Monitor.
-        # The AzureAIOpenTelemetryTracer auto-propagates any metadata key
-        # prefixed with "gen_ai." as span attributes (visible in customDimensions).
         custom_metadata: dict[str, str] = {}
         for key, value in headers.items():
             if key.startswith("metadata-"):
@@ -115,17 +111,19 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
             "conversation_id": conversation_id,
             "record_content": record_content,
             "force_goto_path": payload.options.force_goto_path,
-            "agent_name": "langgraph-workflow-agent",
+            "agent_name": "zava-travel-agent",
+            "agent_id": "zava-travel-agent",
             "otel_agent_span": True,
             "thread_id": request_id,
         }
-        # Inject custom headers both as raw metadata and as gen_ai.* attributes
-        # so the tracer sets them as span attributes in Azure Monitor.
+        # Inject custom headers as gen_ai.custom.* attributes
         for attr_name, value in custom_metadata.items():
             metadata[attr_name] = value
             metadata[f"gen_ai.custom.{attr_name}"] = value
+
         initial_state = {
             "thread": {"messages": [message.model_dump() for message in payload.input.messages]},
+            "messages": [message.model_dump() for message in payload.input.messages],
             "constraints": payload.constraints.model_dump(),
             "metadata": metadata,
         }
@@ -143,17 +141,25 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
                 detail=f"Workflow invocation failed: {exc}",
             ) from exc
 
+        tool_outputs = result.get("tool_outputs", {})
         weather_summary = (
-            result.get("tool_outputs", {})
-            .get("weather", {})
-            .get("summary", "No weather summary available.")
+            tool_outputs.get("weather", {}).get("summary", "No weather data available.")
         )
-        cost_estimate = (
-            result.get("tool_outputs", {}).get("cost", {}).get("estimate_usd", 0.0)
-        )
+        cost_estimate = tool_outputs.get("cost", {}).get("estimate_usd", 0.0)
+        flights = tool_outputs.get("flights", {})
+        hotels = tool_outputs.get("hotels", {})
+        flight_summary = (
+            f"{flights.get('airline', 'N/A')} {flights.get('travel_class', '')} "
+            f"${flights.get('total_price_usd', 0)} for {flights.get('travelers', 0)} travelers"
+        ) if flights else "No flight data available."
+        hotel_summary = (
+            f"{hotels.get('hotel_name', 'N/A')} ({hotels.get('tier', '')}) "
+            f"${hotels.get('total_price_usd', 0)} for {hotels.get('nights', 0)} nights"
+        ) if hotels else "No hotel data available."
         final_message = result.get("final_answer", "No response generated.")
 
-        # Extract trace_id from W3C traceparent header (version-trace_id-parent_id-flags)
+        # Extract trace_id from W3C traceparent header
+        traceparent = headers.get("traceparent", "")
         trace_id = None
         if traceparent:
             parts = traceparent.split("-")
@@ -170,6 +176,8 @@ def create_app(llm: Any | None = None, retriever: OfflineRetriever | None = None
                     route_taken=str(result.get("route", "normal")),
                     cost_estimate_usd=float(cost_estimate),
                     weather_summary=str(weather_summary),
+                    flight_summary=flight_summary,
+                    hotel_summary=hotel_summary,
                 ),
             ),
             telemetry=TelemetryPayload(

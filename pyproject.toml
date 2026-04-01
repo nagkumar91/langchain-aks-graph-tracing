@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "langgraph-workflow-agent"
+name = "zava-travel-agent"
 version = "0.1.0"
-description = "Custom LangGraph workflow agent with AKS deployment and OTel tracing."
+description = "Zava Travel Agent - AI-powered travel planning with LangGraph, AKS deployment, and OTel tracing."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

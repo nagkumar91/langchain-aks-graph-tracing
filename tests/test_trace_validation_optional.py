@@ -36,7 +36,7 @@ def test_trace_id_queryable_in_app_insights() -> None:
         "/invoke",
         json={
             "input": {"messages": [{"role": "user", "content": "trace validation"}]},
-            "constraints": {"budget_usd": 500, "days": 1, "location": "Seattle", "dates": []},
+            "constraints": {"budget_usd": 5000, "days": 3, "destination": "Paris", "travelers": 2, "travel_style": "mid", "dates": []},
             "options": {"record_content": False, "force_goto_path": False},
         },
         headers={"traceparent": traceparent},

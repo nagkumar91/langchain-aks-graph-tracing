@@ -59,7 +59,7 @@ def initialize_tracing() -> TelemetryConfig:
     if normalized_sampler:
         os.environ["OTEL_TRACES_SAMPLER"] = normalized_sampler
 
-    service_name = os.getenv("OTEL_SERVICE_NAME", "langgraph-workflow-agent")
+    service_name = os.getenv("OTEL_SERVICE_NAME", "zava-travel-agent")
     sampler_name = os.getenv("OTEL_TRACES_SAMPLER", "parentbased_trace_id_ratio")
     sampler_arg = os.getenv("OTEL_TRACES_SAMPLER_ARG", "1.0")
     attrs = _resource_attributes()
@@ -88,6 +88,7 @@ def initialize_tracing() -> TelemetryConfig:
         callback_enabled = True
     except ImportError:
         callback_enabled = False
+
     _CONFIG = TelemetryConfig(
         service_name=service_name,
         resource_attributes=attrs,
@@ -95,7 +96,7 @@ def initialize_tracing() -> TelemetryConfig:
         sampler_arg=sampler_arg,
         exporter_enabled=exporter_enabled,
         callback_enabled=callback_enabled,
-        default_record_content=_parse_bool(os.getenv("OTEL_RECORD_CONTENT"), default=False),
+        default_record_content=_parse_bool(os.getenv("OTEL_RECORD_CONTENT"), default=True),
     )
     _INITIALIZED = True
     return _CONFIG
@@ -116,7 +117,7 @@ def create_langchain_callbacks(record_content: bool) -> list[Any]:
         connection_string=connection_string,
         enable_content_recording=record_content,
         provider_name="azure_openai",
-        name=os.getenv("OTEL_SERVICE_NAME", "langgraph-workflow-agent"),
+        name=os.getenv("OTEL_SERVICE_NAME", "zava-travel-agent"),
         trace_all_langgraph_nodes=True,
     )
     return [tracer]

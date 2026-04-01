@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: workflow-agent
+  name: zava-travel-agent
   namespace: agent-tracing-demo
 spec:
-  replicas: 2
+  replicas: 1
   revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate
@@ -13,26 +13,28 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      app: workflow-agent
+      app: zava-travel-agent
   template:
     metadata:
       labels:
-        app: workflow-agent
+        app: zava-travel-agent
         azure.workload.identity/use: "true"
     spec:
-      serviceAccountName: workflow-agent-sa
+      serviceAccountName: zava-travel-agent-sa
+      imagePullSecrets:
+        - name: acr-secret
       containers:
-        - name: workflow-agent
-          image: <your-acr-name>.azurecr.io/langgraph-workflow-agent:<tag>
+        - name: zava-travel-agent
+          image: 7a88072nitya3pagents81b7acr.azurecr.io/zava-travel-agent:v2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
               name: http
           envFrom:
             - configMapRef:
-                name: workflow-agent-config
+                name: zava-travel-agent-config
             - secretRef:
-                name: workflow-agent-secrets
+                name: zava-travel-agent-secrets
           resources:
             requests:
               cpu: 250m
