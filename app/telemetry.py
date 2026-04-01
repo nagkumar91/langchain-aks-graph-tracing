@@ -96,18 +96,28 @@ def initialize_tracing() -> TelemetryConfig:
     callback_enabled = False
     try:
         from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
+        from langchain_azure_ai.callbacks.tracers.inference_tracing import (
+            AzureAIOpenTelemetryTracer,
+        )
 
-        enable_auto_tracing(
+        # Pre-build tracer with name=service_name so that _resolve_agent_name
+        # treats it as a generic marker and falls through to langgraph_node
+        # for per-node span names.  Without this, the default name
+        # "AzureAIOpenTelemetryTracer" doesn't match agent_name in metadata,
+        # so all invoke_agent spans get the same name.
+        tracer = AzureAIOpenTelemetryTracer(
             connection_string=connection_string,
             enable_content_recording=_parse_bool(
                 os.getenv("OTEL_RECORD_CONTENT"), default=True
             ),
             provider_name="azure_openai",
+            name=service_name,
             agent_id="zava-travel-agent",
             trace_all_langgraph_nodes=True,
             message_keys=["messages"],
-            auto_configure_azure_monitor=False,  # already configured above
+            auto_configure_azure_monitor=False,
         )
+        enable_auto_tracing(tracer=tracer)
         auto_instrumented = True
         callback_enabled = True
         LOGGER.info("enable_auto_tracing() active — callbacks injected automatically.")
