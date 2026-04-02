@@ -3,6 +3,7 @@
 ## 1) Prerequisites
 
 - Python 3.11+, Azure CLI (`az`), `kubectl`, Docker
+- MCP tools are included — no extra setup needed (runs as subprocess via stdio)
 - Azure subscription with:
   - Azure OpenAI resource (or APIM gateway to one) with GPT-4.1 deployment
   - App Insights resource
@@ -15,6 +16,10 @@
 cp .env.example .env
 # Fill in AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_CHAT_DEPLOYMENT,
 #         AZURE_OPENAI_API_KEY, APPLICATION_INSIGHTS_CONNECTION_STRING
+#
+# Content recording (ensures tool args/results are NOT redacted in traces):
+#   OTEL_RECORD_CONTENT=true
+#   AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -27,6 +32,8 @@ python3 -m pytest
 
 ```bash
 export OTEL_TRACES_SAMPLER=always_on  # 100% sampling for demos
+export OTEL_RECORD_CONTENT=true
+export AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true
 uvicorn app.server:app --host 0.0.0.0 --port 8080
 ```
 
@@ -215,7 +222,10 @@ invoke_agent zava-travel-agent              (root, ~25-50s)
 ├─ invoke_agent user_proxy
 ├─ invoke_agent orchestrator
 ├─ invoke_agent retrieve_context
-├─ invoke_agent draft_plan
+├─ invoke_agent research_destination        🌐 MCP tools (travel advisory + local phrases)
+│  ├─ app.mcp.get_travel_advisory           visa, safety, currency info
+│  └─ app.mcp.get_local_phrases             local language phrases
+├─ invoke_agent draft_plan                  (enriched with MCP research data)
 │  └─ chat gpt-4.1-2025-04-14              (draft LLM call)
 ├─ invoke_agent run_tools                   📋 gen_ai.tool.definitions
 │  ├─ chat gpt-4.1-2025-04-14              (LLM selects tools)
@@ -243,4 +253,7 @@ invoke_agent zava-travel-agent              (root, ~25-50s)
 | 500 on POST through APIM | APIM can't validate self-signed cert | Create backend with `validateCertificateChain: false` |
 | Timeout on invoke through APIM | Default 30s timeout too short for LLM | Set `forward-request timeout="120"` in policy |
 | No traces in App Insights | 10% sampling drops traces | Set `OTEL_TRACES_SAMPLER=always_on` |
+| Tool args show `[redacted]` | Content recording disabled | Set `OTEL_RECORD_CONTENT=true` and `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` |
+| MCP tools fail silently | Subprocess spawn error | Check `python -m app.mcp_server` runs standalone; check Python path |
+| `MCP_SIMULATE_FAILURE=true` | Intentional failure demo | Unset to restore normal operation |
 | Image pull fails on AKS | ACR role assignment missing | Use `imagePullSecrets` with ACR admin credentials |

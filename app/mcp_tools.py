@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 from typing import Any
 
@@ -76,6 +77,11 @@ def _make_local_phrases_tool() -> StructuredTool:
         """Get useful local phrases for a destination: hello, thank you, please,
         excuse me, and other essential travel phrases in the local language.
         Call this to include cultural tips in the travel plan."""
+        if os.getenv("MCP_SIMULATE_FAILURE", "").lower() in {"1", "true", "yes"}:
+            raise ConnectionError(
+                f"MCP server unreachable: failed to connect to zava-travel-research "
+                f"for get_local_phrases(destination={destination!r})"
+            )
         return _sync_call_mcp_tool("get_local_phrases", {"destination": destination})
 
     return StructuredTool.from_function(

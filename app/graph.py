@@ -195,6 +195,7 @@ def build_graph(
         _annotate_span(state, "research_destination")
         destination = state.get("constraints", {}).get("destination", "Paris")
         research: dict[str, Any] = {}
+        span = trace.get_current_span()
         for tool_name in ("get_travel_advisory", "get_local_phrases"):
             tool_fn = ALL_TOOLS_BY_NAME.get(tool_name)
             if tool_fn is None:
@@ -203,6 +204,13 @@ def build_graph(
                 research[tool_name] = tool_fn.invoke({"destination": destination})
             except Exception as exc:
                 research[tool_name] = {"error": str(exc)}
+                if span:
+                    span.set_attribute(f"app.mcp.{tool_name}.error", str(exc))
+                    span.add_event("mcp_tool_failure", {
+                        "tool_name": tool_name,
+                        "error": str(exc),
+                        "destination": destination,
+                    })
         return {"destination_research": research}
 
     def draft_plan(state: WorkflowState, config: RunnableConfig) -> WorkflowState:
