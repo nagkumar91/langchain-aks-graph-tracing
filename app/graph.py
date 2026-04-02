@@ -11,13 +11,14 @@ from langgraph.types import Command
 from opentelemetry import trace
 
 from app.retriever import OfflineRetriever
-from app.tools import TOOL_LIST, TOOLS_BY_NAME
+from app.tools import ALL_TOOLS, ALL_TOOLS_BY_NAME, TOOL_LIST
 
 
 class WorkflowState(TypedDict, total=False):
     thread: dict[str, list[dict[str, str]]]
     constraints: dict[str, Any]
     context_docs: list[dict[str, Any]]
+    destination_research: dict[str, Any]
     draft_plan: dict[str, Any]
     tool_outputs: dict[str, Any]
     route: str
@@ -142,7 +143,7 @@ def _invoke_with_tools(
             break
 
         for tc in response.tool_calls:
-            tool_fn = TOOLS_BY_NAME.get(tc["name"])
+            tool_fn = ALL_TOOLS_BY_NAME.get(tc["name"])
             if tool_fn is None:
                 result = {"error": f"Unknown tool: {tc['name']}"}
             else:
@@ -160,7 +161,7 @@ def build_graph(
     llm: Any,
     retriever: OfflineRetriever,
 ) -> Any:
-    llm_with_tools = llm.bind_tools(TOOL_LIST)
+    llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
     builder = StateGraph(WorkflowState)
 
@@ -189,22 +190,39 @@ def build_graph(
         docs = retriever.search(query)
         return {"context_docs": docs}
 
+    def research_destination(state: WorkflowState) -> WorkflowState:
+        """Call MCP travel-research tools for visa/safety info and local phrases."""
+        _annotate_span(state, "research_destination")
+        destination = state.get("constraints", {}).get("destination", "Paris")
+        research: dict[str, Any] = {}
+        for tool_name in ("get_travel_advisory", "get_local_phrases"):
+            tool_fn = ALL_TOOLS_BY_NAME.get(tool_name)
+            if tool_fn is None:
+                continue
+            try:
+                research[tool_name] = tool_fn.invoke({"destination": destination})
+            except Exception as exc:
+                research[tool_name] = {"error": str(exc)}
+        return {"destination_research": research}
+
     def draft_plan(state: WorkflowState, config: RunnableConfig) -> WorkflowState:
         _annotate_span(state, "draft_plan")
         payload = {
             "constraints": state.get("constraints", {}),
             "context_docs": state.get("context_docs", []),
+            "destination_research": state.get("destination_research", {}),
             "instruction": (
                 "You are Zava, an expert travel agent. "
                 "Return JSON with keys: destination (string), itinerary (list), and summary (string). "
                 "Each itinerary item should include day, activity, type "
                 "(sightseeing/cultural/adventure/dining/relaxation/shopping), and budget_friendly (bool). "
-                "Consider the traveler's budget, travel style, and destination weather."
+                "Consider the traveler's budget, travel style, destination weather, "
+                "and the travel advisory and local phrases from the destination research."
             ),
         }
         response_text = _invoke_chat(
             llm,
-            "NODE:draft_plan. You are Zava Travel Agent. Build an initial travel plan using destination info and retrieved context.",
+            "NODE:draft_plan. You are Zava Travel Agent. Build an initial travel plan using destination info, retrieved context, and MCP research data.",
             payload,
             config,
         )
@@ -303,16 +321,19 @@ def build_graph(
         payload = {
             "plan": state.get("draft_plan", {}),
             "tool_outputs": state.get("tool_outputs", {}),
+            "destination_research": state.get("destination_research", {}),
             "route": state.get("route", "normal"),
             "instruction": (
                 "You are Zava Travel Agent. Produce the final travel plan summary for the traveler. "
                 "Include flight info, hotel recommendation, daily itinerary highlights, "
-                "total estimated cost, and weather outlook. Be friendly and enthusiastic."
+                "total estimated cost, weather outlook, travel advisory highlights "
+                "(visa, safety, currency), and a few useful local phrases. "
+                "Be friendly and enthusiastic."
             ),
         }
         response_text = _invoke_chat(
             llm,
-            "NODE:finalize. You are Zava Travel Agent. Return the final user-facing travel plan.",
+            "NODE:finalize. You are Zava Travel Agent. Return the final user-facing travel plan with advisory and local phrases.",
             payload,
             config,
         )
@@ -324,6 +345,7 @@ def build_graph(
     builder.add_node("user_proxy", user_proxy)
     builder.add_node("orchestrator", orchestrator)
     builder.add_node("retrieve_context", retrieve_context)
+    builder.add_node("research_destination", research_destination)
     builder.add_node("draft_plan", draft_plan)
     builder.add_node("run_tools", run_tools)
     builder.add_node("evaluate_constraints", evaluate_constraints)
@@ -333,7 +355,8 @@ def build_graph(
     builder.add_edge(START, "user_proxy")
     builder.add_edge("user_proxy", "orchestrator")
     builder.add_edge("orchestrator", "retrieve_context")
-    builder.add_edge("retrieve_context", "draft_plan")
+    builder.add_edge("retrieve_context", "research_destination")
+    builder.add_edge("research_destination", "draft_plan")
     builder.add_edge("draft_plan", "run_tools")
     builder.add_edge("run_tools", "evaluate_constraints")
     builder.add_edge("evaluate_constraints", "finalize")

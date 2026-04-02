@@ -336,3 +336,15 @@ def estimate_trip_cost(
 
 TOOL_LIST = [search_flights, search_hotels, get_destination_weather, estimate_trip_cost]
 TOOLS_BY_NAME = {t.name: t for t in TOOL_LIST}
+
+# MCP-backed tools (travel advisory, local phrases)
+try:
+    from app.mcp_tools import load_mcp_travel_tools
+
+    MCP_TOOLS = load_mcp_travel_tools()
+    ALL_TOOLS = TOOL_LIST + MCP_TOOLS
+    ALL_TOOLS_BY_NAME = {t.name: t for t in ALL_TOOLS}
+except Exception:
+    MCP_TOOLS = []
+    ALL_TOOLS = TOOL_LIST
+    ALL_TOOLS_BY_NAME = TOOLS_BY_NAME

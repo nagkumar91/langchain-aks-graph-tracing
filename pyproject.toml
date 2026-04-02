@@ -23,6 +23,8 @@ dependencies = [
   "opentelemetry-instrumentation-fastapi>=0.45b0",
   "azure-identity>=1.17.1",
   "pydantic>=2.8.2",
+  "mcp[cli]>=1.0.0",
+  "langchain-mcp-adapters>=0.1.0",
 ]
 
 [project.optional-dependencies]
